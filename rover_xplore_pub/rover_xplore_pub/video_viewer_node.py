@@ -1,34 +1,45 @@
 # --- Imports ---
-# rclpy est la bibliothèque Python pour ROS 2 (Robot Operating System)
+# rclpy est la bibliothèque Python pour ROS 2
 import rclpy
 # Node est la classe de base pour créer un nœud ROS 2
 from rclpy.node import Node
 # Image est le type de message ROS 2 standard pour transmettre des images
 from sensor_msgs.msg import Image
-# CvBridge permet de convertir les messages ROS Image en images OpenCV (et vice versa)
+# CvBridge permet de convertir les messages ROS Image en images OpenCV
 from cv_bridge import CvBridge
-# cv2 est OpenCV, la bibliothèque de vision par ordinateur utilisée pour afficher les images
+# cv2 est OpenCV, utilisé pour afficher les images dans une fenêtre
 import cv2
+# threading permet d'exécuter du code en parallèle sur plusieurs threads
+import threading
 
 
 class VideoViewerNode(Node):
     """
-    Nœud ROS 2 qui s'abonne au flux vidéo de la caméra du rover
-    et l'affiche en temps réel dans une fenêtre (vue FPV).
+    Nœud ROS 2 qui reçoit le flux vidéo de la caméra du rover.
+    La réception des images (ROS) et l'affichage (OpenCV) tournent
+    dans des threads séparés pour éviter les conflits.
     """
 
     def __init__(self):
         # Initialise le nœud ROS 2 avec le nom 'video_viewer_node'
         super().__init__('video_viewer_node')
 
-        # Crée un pont entre les messages ROS Image et les images OpenCV
+        # Crée le pont ROS ↔ OpenCV pour convertir les messages Image
         self.bridge = CvBridge()
 
+        # Stocke la dernière image reçue (None au départ, avant la 1ère frame)
+        self.latest_frame = None
+
+        # Verrou (mutex) pour protéger l'accès à latest_frame entre les threads.
+        # Sans ça, le thread ROS pourrait écrire une image pendant que le thread
+        # principal est en train de la lire → corruption de données.
+        self.lock = threading.Lock()
+
         # S'abonne au topic '/camera/image_raw' où la caméra publie ses images
-        # - Image       : type de message attendu
-        # - '/camera/image_raw' : nom du topic ROS 2 à écouter
-        # - self.image_callback : fonction appelée à chaque nouvelle image reçue
-        # - 10          : taille de la file d'attente (queue size)
+        # - Image              : type de message attendu
+        # - '/camera/image_raw': nom du topic ROS 2 à écouter
+        # - self.image_callback: fonction appelée à chaque nouvelle image reçue
+        # - 10                 : taille de la file d'attente (queue size)
         self.subscription = self.create_subscription(
             Image,
             '/camera/image_raw',
@@ -36,59 +47,60 @@ class VideoViewerNode(Node):
             10
         )
 
-        # Log dans la console pour confirmer que le nœud est bien démarré
         self.get_logger().info('video_viewer_node démarré — en attente de frames...')
 
     def image_callback(self, msg):
         """
-        Appelée automatiquement par ROS 2 à chaque nouvelle image reçue sur le topic.
-        Convertit le message ROS en image OpenCV et l'affiche dans une fenêtre.
+        Appelée automatiquement par ROS 2 (dans le thread ROS) à chaque nouvelle image.
+        Convertit le message ROS en image OpenCV et la stocke pour l'affichage.
         """
-        # Convertit le message ROS Image en tableau numpy (format BGR utilisé par OpenCV)
+        # Convertit le message ROS Image en tableau numpy au format BGR (standard OpenCV)
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-        # Affiche l'image dans une fenêtre intitulée 'Rover XPlore — FPV'
-        cv2.imshow('Rover XPlore — FPV', frame)
-
-        # Vérifie si l'utilisateur appuie sur la touche 'q' pour quitter
-        # cv2.waitKey(1) attend 1ms pour un événement clavier
-        # & 0xFF permet d'isoler le code ASCII de la touche pressée
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            self.get_logger().info('Fermeture du viewer...')
-            # Ferme toutes les fenêtres OpenCV
-            cv2.destroyAllWindows()
-            # Arrête proprement le système ROS 2
-            rclpy.shutdown()
-
-    def destroy_node(self):
-        """
-        Appelée automatiquement quand le nœud est détruit (ex: Ctrl+C).
-        S'assure que toutes les fenêtres OpenCV sont bien fermées avant de quitter.
-        """
-        cv2.destroyAllWindows()
-        # Appelle la méthode destroy_node() de la classe parente pour le nettoyage ROS
-        super().destroy_node()
+        # Prend le verrou avant d'écrire dans latest_frame pour éviter
+        # qu'un autre thread lise une image à moitié écrite
+        with self.lock:
+            self.latest_frame = frame
 
 
 def main(args=None):
     """
-    Point d'entrée principal du programme.
-    Initialise ROS 2, crée le nœud, le fait tourner en boucle,
-    puis nettoie proprement à la fermeture.
+    Point d'entrée principal.
+
+    Architecture à deux threads :
+      - Thread ROS  : gère la réception des messages (spin) → s'exécute en arrière-plan
+      - Thread principal : gère l'affichage OpenCV → doit rester sur le thread principal
+        car les fenêtres graphiques (GUI) ne sont pas thread-safe sur la plupart des OS
     """
-    # Initialise le système ROS 2 (doit être appelé avant tout)
+    # Initialise le système ROS 2
     rclpy.init(args=args)
 
-    # Crée une instance du nœud VideoViewerNode
+    # Crée le nœud
     node = VideoViewerNode()
 
-    # Lance la boucle événementielle ROS 2 (bloque ici jusqu'à Ctrl+C ou rclpy.shutdown())
-    rclpy.spin(node)
+    # Lance rclpy.spin() dans un thread séparé (daemon=True : s'arrête automatiquement
+    # quand le programme principal se termine, sans besoin de join explicite)
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
 
-    # Nettoyage : détruit le nœud et libère les ressources
+    # Boucle d'affichage principale — tourne tant que ROS 2 est actif
+    while rclpy.ok():
+        # Récupère la dernière frame de façon thread-safe (verrou)
+        with node.lock:
+            frame = node.latest_frame
+
+        # Affiche la frame seulement si on en a reçu au moins une
+        if frame is not None:
+            cv2.imshow('Rover XPlore — FPV', frame)
+
+        # Attend 1ms pour les événements clavier.
+        # Si l'utilisateur appuie sur 'q', on sort de la boucle
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    # Nettoyage final : ferme la fenêtre OpenCV, détruit le nœud, arrête ROS 2
+    cv2.destroyAllWindows()
     node.destroy_node()
-
-    # Arrête proprement ROS 2
     rclpy.shutdown()
 
 
