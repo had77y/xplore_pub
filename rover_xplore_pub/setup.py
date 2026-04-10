@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'video_viewer_node = rover_xplore_pub.video_viewer_node:main',
+            'mode_selector_node = rover_xplore_pub.mode_selector_node:main',
         ],
     },
 )
