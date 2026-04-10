@@ -5,12 +5,19 @@ import sys
 import tty
 import termios
 import threading
+import time
+import select
+
+
+# Délai avant qu'un axe soit remis à zéro si aucune répétition reçue (secondes)
+AXIS_TIMEOUT = 0.20
 
 
 class TeleopNode(Node):
     """
     Nœud côté PC — téléopération du rover via les flèches du clavier.
-    Publie des commandes Twist sur /rover/cmd_vel toutes les 100ms.
+    Comportement hold-to-move : maintenir la touche = avance, relâcher = stop.
+    Chaque axe (linear / angular) a son propre timeout indépendant.
     linear.x  = avant/arrière
     angular.z = rotation gauche/droite
     """
@@ -20,45 +27,65 @@ class TeleopNode(Node):
 
         self.publisher = self.create_publisher(Twist, '/rover/cmd_vel', 10)
 
-        # État courant des commandes
         self.linear = 0.0
         self.angular = 0.0
+
+        # Timestamp de la dernière touche reçue par axe
+        self.last_linear_time = 0.0
+        self.last_angular_time = 0.0
+
         self.lock = threading.Lock()
 
-        # Envoie les commandes en continu toutes les 100ms
+        # Envoie les commandes toutes les 100ms et gère le timeout des axes
         self.timer = self.create_timer(0.1, self.send_command)
 
         self.get_logger().info('teleop_node démarré')
 
     def send_command(self):
-        """Publie la commande Twist avec l'état actuel."""
+        """Publie Twist. Remet un axe à 0 si aucune répétition reçue depuis AXIS_TIMEOUT."""
+        now = time.time()
         msg = Twist()
         with self.lock:
+            if now - self.last_linear_time > AXIS_TIMEOUT:
+                self.linear = 0.0
+            if now - self.last_angular_time > AXIS_TIMEOUT:
+                self.angular = 0.0
             msg.linear.x = self.linear
             msg.angular.z = self.angular
         self.publisher.publish(msg)
 
-    def set_velocity(self, linear=None, angular=None):
-        """Met à jour les valeurs de vitesse de façon thread-safe."""
+    def set_linear(self, value):
         with self.lock:
-            if linear is not None:
-                self.linear = linear
-            if angular is not None:
-                self.angular = angular
+            self.linear = value
+            self.last_linear_time = time.time()
+
+    def set_angular(self, value):
+        with self.lock:
+            self.angular = value
+            self.last_angular_time = time.time()
 
     def stop(self):
-        """Stoppe le rover — remet tout à zéro."""
         with self.lock:
             self.linear = 0.0
             self.angular = 0.0
+            self.last_linear_time = 0.0
+            self.last_angular_time = 0.0
 
 
-def get_key(settings):
-    """Lit une touche clavier (gère les flèches = séquences de 3 caractères)."""
+def get_key(settings, timeout=0.05):
+    """
+    Lit une touche clavier avec timeout.
+    Retourne None si aucune touche appuyée dans le délai imparti.
+    Gère les flèches (séquences de 3 caractères).
+    """
     tty.setraw(sys.stdin.fileno())
-    key = sys.stdin.read(1)
-    if key == '\x1b':
-        key += sys.stdin.read(2)  # flèche = 3 caractères : \x1b[A/B/C/D
+    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    if rlist:
+        key = sys.stdin.read(1)
+        if key == '\x1b':
+            key += sys.stdin.read(2)  # flèche = \x1b[A/B/C/D
+    else:
+        key = None  # timeout, aucune touche
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
@@ -76,32 +103,32 @@ def main(args=None):
     print('\n' + '═' * 42)
     print('   XPLORE ROVER — Téléopération')
     print('═' * 42)
-    print('   ↑        →  avancer')
-    print('   ↓        →  reculer')
-    print('   ←        →  tourner gauche')
-    print('   →        →  tourner droite')
-    print('   Espace   →  stop')
-    print('   Q        →  quitter')
-    print('═' * 42)
-    print('   ↑ puis ← = virage gauche en arc')
-    print('   ← seul   = pivot sur place')
+    print('   ↑  (maintenir)  →  avancer')
+    print('   ↓  (maintenir)  →  reculer')
+    print('   ←  (maintenir)  →  tourner gauche')
+    print('   →  (maintenir)  →  tourner droite')
+    print('   ↑ + ←           →  virage gauche en arc')
+    print('   ←  seul          →  pivot sur place')
+    print('   Espace           →  stop immédiat')
+    print('   Q                →  quitter')
     print('═' * 42 + '\n')
 
     try:
         while rclpy.ok():
-            key = get_key(settings)
+            key = get_key(settings, timeout=0.05)
 
-            if key == '\x1b[A':      # flèche haut
-                node.set_velocity(linear=1.0)
+            if key is None:
+                continue  # pas de touche — les axes se remettent à 0 via timeout
+            elif key == '\x1b[A':    # flèche haut
+                node.set_linear(1.0)
             elif key == '\x1b[B':    # flèche bas
-                node.set_velocity(linear=-1.0)
+                node.set_linear(-1.0)
             elif key == '\x1b[C':    # flèche droite
-                node.set_velocity(angular=-1.0)
+                node.set_angular(-1.0)
             elif key == '\x1b[D':    # flèche gauche
-                node.set_velocity(angular=1.0)
-            elif key == ' ':         # espace = stop
+                node.set_angular(1.0)
+            elif key == ' ':         # espace = stop immédiat
                 node.stop()
-                print('[STOP]')
             elif key.lower() == 'q':
                 node.stop()
                 print('\nArrêt téléopération.')
