@@ -91,16 +91,16 @@ def main(args=None):
     print('\n' + '═' * 48)
     print('   XPLORE ROVER — Téléopération')
     print('═' * 48)
-    print('   ↑            →  avancer')
-    print('   ↓            →  reculer')
-    print('   ←            →  pivot gauche')
-    print('   →            →  pivot droite')
-    print('   W            →  arc avant gauche')
+    print('   W            →  avancer')
+    print('   S            →  reculer')
+    print('   A            →  pivot gauche')
+    print('   D            →  pivot droite')
+    print('   Q            →  arc avant gauche')
     print('   E            →  arc avant droite')
-    print('   A            →  arc arrière gauche')
-    print('   D            →  arc arrière droite')
+    print('   Y            →  arc arrière gauche')
+    print('   X            →  arc arrière droite')
     print('   Espace       →  stop immédiat')
-    print('   Q            →  quitter')
+    print('   P            →  quitter')
     print('═' * 48 + '\n')
 
     try:
@@ -109,25 +109,25 @@ def main(args=None):
 
             if key is None:
                 continue
-            elif key == '\x1b[A':        # ↑
+            elif key.lower() == 'w':     # avancer
                 node.set_axes(linear=1.0)
-            elif key == '\x1b[B':        # ↓
+            elif key.lower() == 's':     # reculer
                 node.set_axes(linear=-1.0)
-            elif key == '\x1b[D':        # ←
+            elif key.lower() == 'a':     # pivot gauche
                 node.set_axes(angular=1.0)
-            elif key == '\x1b[C':        # →
+            elif key.lower() == 'd':     # pivot droite
                 node.set_axes(angular=-1.0)
-            elif key.lower() == 'w':     # arc avant gauche
+            elif key.lower() == 'q':     # arc avant gauche
                 node.set_axes(linear=1.0, angular=1.0)
             elif key.lower() == 'e':     # arc avant droite
                 node.set_axes(linear=1.0, angular=-1.0)
-            elif key.lower() == 'a':     # arc arrière gauche
+            elif key.lower() == 'y':     # arc arrière gauche
                 node.set_axes(linear=-1.0, angular=1.0)
-            elif key.lower() == 'd':     # arc arrière droite
+            elif key.lower() == 'x':     # arc arrière droite
                 node.set_axes(linear=-1.0, angular=-1.0)
             elif key == ' ':             # stop
                 node.stop()
-            elif key.lower() == 'q':
+            elif key.lower() == 'p':
                 node.stop()
                 print('\nArrêt téléopération.')
                 break
