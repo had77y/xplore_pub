@@ -12,9 +12,9 @@ import select
 AXIS_TIMEOUT = 0.20
 
 SPEED_LEVELS = {
-    '1': 0.33,
-    '2': 0.66,
-    '3': 1.0,
+    '8': 0.33,
+    '9': 0.66,
+    '0': 1.0,
 }
 
 
@@ -91,7 +91,7 @@ def get_key(settings, timeout=0.05):
 
 
 def print_status(speed):
-    level = {0.33: '1', 0.66: '2', 1.0: '3'}.get(speed, '?')
+    level = {0.33: '8', 0.66: '9', 1.0: '0'}.get(speed, '?')
     bar = '█' * int(speed * 9)
     print(f'\r   Vitesse : [{bar:<9}] niveau {level}   ', end='', flush=True)
 
@@ -116,7 +116,7 @@ def main(args=None):
     print('   E            →  arc avant droite')
     print('   Y            →  arc arrière gauche')
     print('   X            →  arc arrière droite')
-    print('   1 / 2 / 3    →  vitesse lente / moyenne / pleine')
+    print('   8 / 9 / 0    →  vitesse lente / moyenne / pleine')
     print('   Espace       →  stop immédiat')
     print('   P            →  quitter')
     print('═' * 48)
