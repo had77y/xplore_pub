@@ -72,22 +72,43 @@ class TeleopNode(Node):
             self.last_angular_time = 0.0
 
 
-def get_key(settings, timeout=0.05):
+def read_key_sequence(settings):
+    """Lit une séquence clavier (non-bloquant). Retourne None si rien disponible."""
+    rlist, _, _ = select.select([sys.stdin], [], [], 0)
+    if not rlist:
+        return None
+    key = sys.stdin.read(1)
+    if key == '\x1b':
+        key += sys.stdin.read(2)  # flèche = \x1b[A/B/C/D
+    return key
+
+
+def get_all_keys(settings, timeout=0.05):
     """
-    Lit une touche clavier avec timeout.
-    Retourne None si aucune touche appuyée dans le délai imparti.
-    Gère les flèches (séquences de 3 caractères).
+    Attend jusqu'à `timeout` secondes la première touche,
+    puis draine toutes les touches disponibles dans le buffer.
+    Retourne une liste (vide si aucune touche).
     """
     tty.setraw(sys.stdin.fileno())
+    keys = []
+
+    # Attendre la première touche
     rlist, _, _ = select.select([sys.stdin], [], [], timeout)
     if rlist:
         key = sys.stdin.read(1)
         if key == '\x1b':
-            key += sys.stdin.read(2)  # flèche = \x1b[A/B/C/D
-    else:
-        key = None  # timeout, aucune touche
+            key += sys.stdin.read(2)
+        keys.append(key)
+
+        # Drainer le reste du buffer (non-bloquant)
+        while True:
+            key = read_key_sequence(settings)
+            if key is None:
+                break
+            keys.append(key)
+
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-    return key
+    return keys
 
 
 def main(args=None):
@@ -115,24 +136,24 @@ def main(args=None):
 
     try:
         while rclpy.ok():
-            key = get_key(settings, timeout=0.05)
+            keys = get_all_keys(settings, timeout=0.05)
 
-            if key is None:
-                continue  # pas de touche — les axes se remettent à 0 via timeout
-            elif key == '\x1b[A':    # flèche haut
-                node.set_linear(1.0)
-            elif key == '\x1b[B':    # flèche bas
-                node.set_linear(-1.0)
-            elif key == '\x1b[C':    # flèche droite
-                node.set_angular(-1.0)
-            elif key == '\x1b[D':    # flèche gauche
-                node.set_angular(1.0)
-            elif key == ' ':         # espace = stop immédiat
-                node.stop()
-            elif key.lower() == 'q':
-                node.stop()
-                print('\nArrêt téléopération.')
-                break
+            for key in keys:
+                if key == '\x1b[A':    # flèche haut
+                    node.set_linear(1.0)
+                elif key == '\x1b[B':    # flèche bas
+                    node.set_linear(-1.0)
+                elif key == '\x1b[C':    # flèche droite
+                    node.set_angular(-1.0)
+                elif key == '\x1b[D':    # flèche gauche
+                    node.set_angular(1.0)
+                elif key == ' ':         # espace = stop immédiat
+                    node.stop()
+                elif key.lower() == 'q':
+                    node.stop()
+                    print('\nArrêt téléopération.')
+                    rclpy.shutdown()
+                    break
 
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
