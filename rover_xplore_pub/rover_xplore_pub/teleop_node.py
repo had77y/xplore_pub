@@ -11,6 +11,12 @@ import select
 
 AXIS_TIMEOUT = 0.20
 
+SPEED_LEVELS = {
+    '1': 0.33,
+    '2': 0.66,
+    '3': 1.0,
+}
+
 
 class TeleopNode(Node):
     """
@@ -29,6 +35,7 @@ class TeleopNode(Node):
         self.angular = 0.0
         self.last_linear_time = 0.0
         self.last_angular_time = 0.0
+        self.speed = 1.0
 
         self.lock = threading.Lock()
 
@@ -44,8 +51,8 @@ class TeleopNode(Node):
                 self.linear = 0.0
             if now - self.last_angular_time > AXIS_TIMEOUT:
                 self.angular = 0.0
-            msg.linear.x = self.linear
-            msg.angular.z = self.angular
+            msg.linear.x = self.linear * self.speed
+            msg.angular.z = self.angular * self.speed
         self.publisher.publish(msg)
 
     def set_axes(self, linear=None, angular=None):
@@ -57,6 +64,10 @@ class TeleopNode(Node):
             if angular is not None:
                 self.angular = angular
                 self.last_angular_time = now
+
+    def set_speed(self, speed):
+        with self.lock:
+            self.speed = speed
 
     def stop(self):
         with self.lock:
@@ -79,6 +90,12 @@ def get_key(settings, timeout=0.05):
     return key
 
 
+def print_status(speed):
+    level = {0.33: '1', 0.66: '2', 1.0: '3'}.get(speed, '?')
+    bar = '█' * int(speed * 9)
+    print(f'\r   Vitesse : [{bar:<9}] niveau {level}   ', end='', flush=True)
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = TeleopNode()
@@ -99,9 +116,11 @@ def main(args=None):
     print('   E            →  arc avant droite')
     print('   Y            →  arc arrière gauche')
     print('   X            →  arc arrière droite')
+    print('   1 / 2 / 3    →  vitesse lente / moyenne / pleine')
     print('   Espace       →  stop immédiat')
     print('   P            →  quitter')
-    print('═' * 48 + '\n')
+    print('═' * 48)
+    print_status(node.speed)
 
     try:
         while rclpy.ok():
@@ -125,11 +144,14 @@ def main(args=None):
                 node.set_axes(linear=-1.0, angular=1.0)
             elif key.lower() == 'x':     # arc arrière droite
                 node.set_axes(linear=-1.0, angular=-1.0)
+            elif key in SPEED_LEVELS:
+                node.set_speed(SPEED_LEVELS[key])
+                print_status(SPEED_LEVELS[key])
             elif key == ' ':             # stop
                 node.stop()
             elif key.lower() == 'p':
                 node.stop()
-                print('\nArrêt téléopération.')
+                print('\n\nArrêt téléopération.')
                 break
 
     finally:
