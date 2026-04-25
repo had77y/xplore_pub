@@ -6,6 +6,10 @@ setup(
     name=package_name,
     version='0.0.1',
     packages=[package_name],
+    package_data={
+        package_name: ['xplore_logo.jpg'],
+    },
+    include_package_data=True,
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -19,6 +23,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
+            'rover_gui = rover_xplore_pub.rover_gui:main',
             'video_viewer_node = rover_xplore_pub.video_viewer_node:main',
             'mode_selector_node = rover_xplore_pub.mode_selector_node:main',
             'teleop_node = rover_xplore_pub.teleop_node:main',
