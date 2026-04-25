@@ -8,6 +8,7 @@ import termios
 import threading
 import time
 import select
+import subprocess
 
 
 AXIS_TIMEOUT = 0.20
@@ -41,6 +42,7 @@ class ControllerNode(Node):
         self.speed   = 1.0
 
         self.lock = threading.Lock()
+        self._viewer_proc = None  # subprocess video_viewer_node
 
         self.timer = self.create_timer(0.1, self.send_command)
 
@@ -89,6 +91,19 @@ class ControllerNode(Node):
         msg = String()
         msg.data = mode
         self.mode_publisher.publish(msg)
+
+    # ── Viewer FPV ───────────────────────────────────────────────────────────
+
+    def start_viewer(self):
+        if self._viewer_proc is None or self._viewer_proc.poll() is not None:
+            self._viewer_proc = subprocess.Popen(
+                ['ros2', 'run', 'rover_xplore_pub', 'video_viewer_node']
+            )
+
+    def stop_viewer(self):
+        if self._viewer_proc and self._viewer_proc.poll() is None:
+            self._viewer_proc.terminate()
+            self._viewer_proc = None
 
 
 # ── Affichage ─────────────────────────────────────────────────────────────────
@@ -212,6 +227,7 @@ def main(args=None):
                 if key.lower() == 'r':
                     node.state = STATE_RACE
                     node.publish_mode('race')
+                    node.start_viewer()
                     print_race(node.speed)
                 elif key.lower() == 'b':
                     node.state = STATE_ARM
@@ -232,6 +248,7 @@ def main(args=None):
             elif state == STATE_RACE:
                 if key.lower() == 'm':
                     node.stop_motors()
+                    node.stop_viewer()
                     node.state = STATE_MENU_MAIN
                     node.publish_mode('idle')
                     print_menu_main()
@@ -267,6 +284,7 @@ def main(args=None):
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
         node.stop_motors()
+        node.stop_viewer()
         node.destroy_node()
         rclpy.shutdown()
 
