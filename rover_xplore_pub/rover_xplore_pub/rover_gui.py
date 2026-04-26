@@ -1077,7 +1077,8 @@ class CameraThumb(QFrame):
         self._on_expand = on_expand
         self.setObjectName('card')
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(220, 158)
+        self.setFixedWidth(220)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -1214,11 +1215,11 @@ class AutonomousPage(QWidget):
         sensors.setSpacing(10)
         self.us_card  = USSensorsCard()
         self.imu_card = IMUCard()
-        sensors.addWidget(self.us_card)
-        sensors.addWidget(self.imu_card)
+        sensors.addWidget(self.us_card, 1)
+        sensors.addWidget(self.imu_card, 1)
         bottom.addLayout(sensors, 1)
 
-        lay.addLayout(bottom)
+        lay.addLayout(bottom, 1)
         return w
 
     def _build_aruco_card(self) -> QFrame:
