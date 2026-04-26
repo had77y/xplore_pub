@@ -1172,29 +1172,25 @@ class MainWindow(QMainWindow):
         }
         self.footer_dot.set_color(color_map.get(mode, ACCENT), size=10)
 
-    def _switch_page(self, page: QWidget):
-        self.stack.setCurrentWidget(page)
-        fade_in(page, duration=300)
-
     def show_menu(self):
         self._set_mode('idle')
-        self._switch_page(self.page_menu)
+        self.stack.setCurrentWidget(self.page_menu)
 
     def show_teleop_menu(self):
-        self._switch_page(self.page_teleop)
+        self.stack.setCurrentWidget(self.page_teleop)
 
     def show_race(self):
         self._set_mode('race')
-        self._switch_page(self.page_race)
+        self.stack.setCurrentWidget(self.page_race)
         self.page_race.setFocus()
 
     def show_autonomous(self):
         self._set_mode('autonomous')
-        self._switch_page(self.page_autonomous)
+        self.stack.setCurrentWidget(self.page_autonomous)
 
     def show_arm(self):
         self._set_mode('arm')
-        self._switch_page(self.page_arm)
+        self.stack.setCurrentWidget(self.page_arm)
 
     def closeEvent(self, event):
         self.bridge.publish_mode('idle')
