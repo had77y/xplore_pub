@@ -52,13 +52,13 @@ from PySide6.QtWidgets import (
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Fonds — bleu marine exact du logo XPlore (sobre, profond)
-BG_DEEP     = '#0E1A33'  # fond principal — couleur du logo
-BG_SURFACE  = '#16223D'  # cartes (subtilement plus claire)
-BG_ELEVATED = '#1C2A48'  # cartes élevées / hover
+BG_DEEP     = '#0C1427'  # fond principal — couleur du logo
+BG_SURFACE  = '#121E36'  # cartes (subtilement plus claire)
+BG_ELEVATED = '#182440'  # cartes élevées / hover
 
 # Bordures (subtiles, ne ressortent que peu)
-BORDER       = '#243756'
-BORDER_HOVER = '#36507A'
+BORDER       = '#1E2E4A'
+BORDER_HOVER = '#2E4268'
 
 # Identité
 PRIMARY     = '#E53935'  # rouge XPlore
@@ -67,7 +67,7 @@ ACCENT      = '#00AEEF'  # cyan
 ACCENT_2    = '#5AE8B5'  # vert succès (ArUco détecté)
 
 # Texte
-TEXT        = '#FFFFFF'
+TEXT        = '#F3F6F9'
 TEXT_DIM    = '#B8C5D9'
 TEXT_MUTED  = '#6B7A95'
 
