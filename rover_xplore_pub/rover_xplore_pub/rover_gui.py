@@ -616,7 +616,7 @@ class TeleopMenuPage(QWidget):
 
         layout.addSpacing(28)
 
-        back_btn = QPushButton('← MENU PRINCIPAL')
+        back_btn = GlowButton('← MENU PRINCIPAL', glow_color=(0, 174, 239), border_radius=10)
         back_btn.setObjectName('ghost_btn')
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.clicked.connect(on_back)
@@ -802,7 +802,7 @@ class RacePage(QWidget):
 
         layout.addStretch(1)
 
-        back = QPushButton('← TÉLÉOPÉRATION')
+        back = GlowButton('← TÉLÉOPÉRATION', glow_color=(0, 174, 239), border_radius=10)
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self.on_back)
@@ -1306,7 +1306,7 @@ class AutonomousPage(QWidget):
 
         hdr.addStretch(1)
 
-        back = QPushButton('← MENU PRINCIPAL')
+        back = GlowButton('← MENU PRINCIPAL', glow_color=(0, 174, 239), border_radius=10)
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(on_back)
@@ -1490,7 +1490,7 @@ class ArmPage(QWidget):
         badge.setObjectName('mode_badge')
         header.addWidget(badge)
         header.addStretch(1)
-        back = QPushButton('← TÉLÉOPÉRATION')
+        back = GlowButton('← TÉLÉOPÉRATION', glow_color=(0, 174, 239), border_radius=10)
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._on_back)
