@@ -482,7 +482,7 @@ class MenuPage(QWidget):
         layout.addStretch(2)
 
         # Logo
-        layout.addWidget(make_logo(150), alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(make_logo(220), alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Sous-titre
         subtitle = QLabel('ROVER  CONTROL')
@@ -692,10 +692,10 @@ class RacePage(QWidget):
         speed_row.addStretch(1)
         layout.addLayout(speed_row)
 
-        self.speed_label = QLabel('100 %')
+        self.speed_label = QLabel('Niveau : 0 (100%)')
         self.speed_label.setStyleSheet(
-            f'color: {ACCENT}; font-size: 24px; font-weight: 700; '
-            f'letter-spacing: 2px; padding-top: 6px;'
+            f'color: {TEXT_DIM}; font-size: 14px; font-weight: 500; '
+            f'letter-spacing: 1px; padding-top: 4px;'
         )
         layout.addWidget(self.speed_label)
 
@@ -843,11 +843,11 @@ class RacePage(QWidget):
             return
 
         if key in SPEED_LEVELS:
-            speed_val, _ = SPEED_LEVELS[key]
+            speed_val, label = SPEED_LEVELS[key]
             self.speed = speed_val
             for k, ind in self.speed_indicators.items():
                 ind.setActive(k == key)
-            self.speed_label.setText(f'{int(speed_val*100)} %')
+            self.speed_label.setText(f'Niveau : {label} ({int(speed_val*100)}%)')
             return
 
         if key in MOVEMENT_KEYS:
