@@ -203,16 +203,43 @@ VIDEO_QOS = QoSProfile(
 )
 
 
-class RosBridge(QObject, Node):
-    """Pont ROS2 ↔ Qt. Émet des signaux Qt depuis les callbacks ROS2."""
+class RosBridge(QObject):
+    """Pont ROS2 ↔ Qt. Émet des signaux Qt depuis les callbacks ROS2.
+
+    Composition plutôt qu'héritage multiple (QObject + Node sont incompatibles
+    avec super().__init__ — MRO conflict sur node_name).
+    """
 
     frame_ready = Signal(QImage)
     aruco_update = Signal(bool, int, float, float, float)  # detected, id, cx, cy, area
     status_update = Signal(str)
 
     def __init__(self):
-        QObject.__init__(self)
-        Node.__init__(self, 'rover_gui')
+        super().__init__()
+        self._node = _RosNode(self)
+
+    # ── Publications ──
+
+    def publish_mode(self, mode: str):
+        self._node.publish_mode(mode)
+
+    def publish_cmd(self, linear: float, angular: float):
+        self._node.publish_cmd(linear, angular)
+
+    def destroy_node(self):
+        self._node.destroy_node()
+
+    @property
+    def node(self):
+        return self._node
+
+
+class _RosNode(Node):
+    """Node ROS2 interne — callbacks émettent les signaux Qt via bridge."""
+
+    def __init__(self, bridge: RosBridge):
+        super().__init__('rover_gui')
+        self._bridge = bridge
 
         self.pub_mode = self.create_publisher(String, '/rover/mode', 10)
         self.pub_cmd  = self.create_publisher(Twist, '/rover/cmd_vel', 10)
@@ -228,8 +255,6 @@ class RosBridge(QObject, Node):
             String, '/rover_status', self._on_status, 10
         )
 
-    # ── Publications ──
-
     def publish_mode(self, mode: str):
         msg = String()
         msg.data = mode
@@ -241,8 +266,6 @@ class RosBridge(QObject, Node):
         msg.angular.z = float(angular)
         self.pub_cmd.publish(msg)
 
-    # ── Callbacks ──
-
     def _on_image(self, msg: CompressedImage):
         buf = np.frombuffer(msg.data, dtype=np.uint8)
         bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
@@ -250,20 +273,19 @@ class RosBridge(QObject, Node):
             return
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w, _ = rgb.shape
-        # Copie nécessaire car frombuffer/cvtColor référencent un buffer temporaire
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
-        self.frame_ready.emit(qimg)
+        self._bridge.frame_ready.emit(qimg)
 
     def _on_aruco(self, msg: Float32MultiArray):
         if len(msg.data) < 5:
             return
         detected = msg.data[0] > 0.5
-        self.aruco_update.emit(
+        self._bridge.aruco_update.emit(
             detected, int(msg.data[1]), msg.data[2], msg.data[3], msg.data[4]
         )
 
     def _on_status(self, msg: String):
-        self.status_update.emit(msg.data)
+        self._bridge.status_update.emit(msg.data)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -922,7 +944,7 @@ def main(args=None):
     bridge = RosBridge()
 
     # Spin ROS2 dans un thread séparé
-    spin_thread = threading.Thread(target=rclpy.spin, args=(bridge,), daemon=True)
+    spin_thread = threading.Thread(target=rclpy.spin, args=(bridge.node,), daemon=True)
     spin_thread.start()
 
     window = MainWindow(bridge)
