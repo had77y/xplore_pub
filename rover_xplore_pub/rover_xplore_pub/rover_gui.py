@@ -650,8 +650,7 @@ class RacePage(QWidget):
         self.cmd_timer.start(100)
 
     def _build_left_panel(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName('card')
+        card = GlowCard(phase_offset=0.0)
         card.setFixedWidth(380)
 
         layout = QVBoxLayout(card)
@@ -747,8 +746,7 @@ class RacePage(QWidget):
         return card
 
     def _build_right_panel(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName('card')
+        card = GlowCard(phase_offset=math.pi)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(28, 28, 28, 28)
         layout.setSpacing(18)
