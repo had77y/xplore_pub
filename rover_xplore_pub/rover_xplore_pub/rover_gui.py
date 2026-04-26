@@ -34,12 +34,16 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String, Float32MultiArray
 from geometry_msgs.msg import Twist
 
-from PySide6.QtCore import Qt, QObject, Signal, QTimer, QSize
+from PySide6.QtCore import (
+    Qt, QObject, Signal, QTimer, QSize,
+    QPropertyAnimation, QEasingCurve,
+)
 from PySide6.QtGui import QImage, QPixmap, QFont, QFontDatabase, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QSizePolicy, QSpacerItem,
+    QGraphicsOpacityEffect,
 )
 
 
@@ -47,15 +51,14 @@ from PySide6.QtWidgets import (
 # PALETTE XPLORE — bleu marine profond inspiré du logo
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Fonds
-BG_DEEP     = '#0A1428'  # fond principal (radial gradient)
-BG_DEEP_2   = '#142042'  # bord du gradient (plus clair)
-BG_SURFACE  = '#16243F'  # cartes
-BG_ELEVATED = '#1E2F4D'  # cartes élevées / hover
+# Fonds — bleu marine exact du logo XPlore (sobre, profond)
+BG_DEEP     = '#0E1A33'  # fond principal — couleur du logo
+BG_SURFACE  = '#16223D'  # cartes (subtilement plus claire)
+BG_ELEVATED = '#1C2A48'  # cartes élevées / hover
 
-# Bordures
-BORDER       = '#2A3D5F'
-BORDER_HOVER = '#3D5380'
+# Bordures (subtiles, ne ressortent que peu)
+BORDER       = '#243756'
+BORDER_HOVER = '#36507A'
 
 # Identité
 PRIMARY     = '#E53935'  # rouge XPlore
@@ -84,21 +87,17 @@ GLOBAL_QSS = f"""
 
 QMainWindow, QWidget#root {{
     background-color: {BG_DEEP};
-    background: qradialgradient(
-        cx:0.5, cy:0.0, radius:1.4, fx:0.5, fy:0.0,
-        stop:0 {BG_DEEP_2}, stop:1 {BG_DEEP}
-    );
 }}
 
 /* ── Header / Footer ─────────────────────────────────────── */
 
 QFrame#header {{
-    background-color: rgba(10, 20, 40, 180);
+    background-color: {BG_DEEP};
     border-bottom: 1px solid {BORDER};
 }}
 
 QFrame#footer {{
-    background-color: rgba(10, 20, 40, 200);
+    background-color: {BG_DEEP};
     border-top: 1px solid {BORDER};
 }}
 
@@ -182,13 +181,14 @@ QPushButton#menu_btn {{
     font-size: 16px;
     font-weight: 600;
     letter-spacing: 4px;
-    min-width: 320px;
-    min-height: 70px;
+    min-width: 340px;
+    min-height: 72px;
     color: {TEXT};
+    text-align: center;
 }}
 QPushButton#menu_btn:hover {{
     background-color: {BG_ELEVATED};
-    border-color: {ACCENT};
+    border-color: {PRIMARY};
     color: {TEXT};
 }}
 QPushButton#menu_btn:pressed {{
@@ -196,37 +196,21 @@ QPushButton#menu_btn:pressed {{
     border-color: {PRIMARY};
 }}
 
-QPushButton#menu_btn_primary {{
-    background-color: {PRIMARY};
-    border: 1px solid {PRIMARY};
-    border-radius: 16px;
-    padding: 28px 40px;
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: 4px;
-    min-width: 320px;
-    min-height: 70px;
-    color: {TEXT};
-}}
-QPushButton#menu_btn_primary:hover {{
-    background-color: {PRIMARY_HOV};
-    border-color: {PRIMARY_HOV};
-}}
-
 QPushButton#menu_btn_quit {{
     background-color: transparent;
     border: 1px solid {BORDER};
     border-radius: 16px;
-    padding: 24px 40px;
-    font-size: 13px;
+    padding: 22px 40px;
+    font-size: 12px;
     font-weight: 500;
     letter-spacing: 4px;
-    min-width: 320px;
+    min-width: 340px;
     color: {TEXT_MUTED};
 }}
 QPushButton#menu_btn_quit:hover {{
     border-color: {PRIMARY};
     color: {PRIMARY};
+    background-color: rgba(229, 57, 53, 25);
 }}
 
 QPushButton#ghost_btn {{
@@ -424,6 +408,47 @@ def make_section_label(text: str) -> QLabel:
     return lbl
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ANIMATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PulsingDot(QLabel):
+    """Point coloré qui pulse en opacité — utilisé dans les badges de mode."""
+
+    def __init__(self, color: str, size: int = 14):
+        super().__init__('●')
+        self.setStyleSheet(f'color: {color}; font-size: {size}px;')
+
+        self._eff = QGraphicsOpacityEffect(self)
+        self._eff.setOpacity(1.0)
+        self.setGraphicsEffect(self._eff)
+
+        self._anim = QPropertyAnimation(self._eff, b'opacity')
+        self._anim.setDuration(1400)
+        self._anim.setKeyValueAt(0.0, 1.0)
+        self._anim.setKeyValueAt(0.5, 0.25)
+        self._anim.setKeyValueAt(1.0, 1.0)
+        self._anim.setLoopCount(-1)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._anim.start()
+
+    def set_color(self, color: str, size: int = 14):
+        self.setStyleSheet(f'color: {color}; font-size: {size}px;')
+
+
+def fade_in(widget: QWidget, duration: int = 350):
+    """Anime l'opacité d'un widget de 0 à 1 — pour transitions de pages."""
+    eff = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b'opacity')
+    anim.setDuration(duration)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    anim.start()
+    widget._fade_anim = anim  # garder une réf pour ne pas être collecté
+
+
 def make_breadcrumb(*parts: str) -> QWidget:
     """Crée une barre de fil d'ariane : XPLORE › TÉLÉOP › RACE"""
     w = QWidget()
@@ -467,9 +492,9 @@ class MenuPage(QWidget):
 
         layout.addSpacing(40)
 
-        # Boutons : autonome (primary rouge), téléop (soft), quitter (ghost)
+        # Boutons sobres par défaut, rouge uniquement au hover
         for text, slot, obj_name in [
-            ('AUTONOME', on_autonomous, 'menu_btn_primary'),
+            ('AUTONOME', on_autonomous, 'menu_btn'),
             ('TÉLÉOPÉRATION', on_teleop, 'menu_btn'),
             ('QUITTER', on_quit, 'menu_btn_quit'),
         ]:
@@ -508,7 +533,7 @@ class TeleopMenuPage(QWidget):
         layout.addSpacing(40)
 
         for text, slot, obj_name in [
-            ('RACE  ·  FPV', on_race, 'menu_btn_primary'),
+            ('RACE  ·  FPV', on_race, 'menu_btn'),
             ('BRAS  ·  RAMASSAGE', on_arm, 'menu_btn'),
         ]:
             btn = QPushButton(text)
@@ -632,11 +657,23 @@ class RacePage(QWidget):
         layout.setContentsMargins(28, 28, 28, 28)
         layout.setSpacing(20)
 
-        # En-tête : badge mode + breadcrumb
+        # En-tête : badge mode (avec dot animé)
         header = QHBoxLayout()
-        badge = QLabel('● RACE')
-        badge.setObjectName('mode_badge')
-        header.addWidget(badge)
+        header.setSpacing(8)
+        badge_wrap = QFrame()
+        badge_wrap.setStyleSheet(
+            f'background-color: {PRIMARY}; border-radius: 14px; padding: 4px 14px;'
+        )
+        badge_lay = QHBoxLayout(badge_wrap)
+        badge_lay.setContentsMargins(8, 4, 14, 4)
+        badge_lay.setSpacing(8)
+        badge_lay.addWidget(PulsingDot(TEXT, size=10))
+        badge_text = QLabel('RACE')
+        badge_text.setStyleSheet(
+            f'color: {TEXT}; font-size: 11px; font-weight: 800; letter-spacing: 4px;'
+        )
+        badge_lay.addWidget(badge_text)
+        header.addWidget(badge_wrap)
         header.addStretch(1)
         layout.addLayout(header)
 
@@ -655,8 +692,11 @@ class RacePage(QWidget):
         speed_row.addStretch(1)
         layout.addLayout(speed_row)
 
-        self.speed_label = QLabel('Niveau 0  ·  100 %')
-        self.speed_label.setObjectName('status_label')
+        self.speed_label = QLabel('100 %')
+        self.speed_label.setStyleSheet(
+            f'color: {ACCENT}; font-size: 24px; font-weight: 700; '
+            f'letter-spacing: 2px; padding-top: 6px;'
+        )
         layout.addWidget(self.speed_label)
 
         layout.addSpacing(16)
@@ -691,18 +731,27 @@ class RacePage(QWidget):
 
         layout.addSpacing(16)
 
-        # Aide
+        # Aide — chaque raccourci sur sa ligne avec key + description
         layout.addWidget(make_section_label('Raccourcis'))
-        help_text = QLabel(
-            '⎵   Stop moteurs\n'
-            '8 9 0   Vitesse\n'
-            'M   Retour menu'
-        )
-        help_text.setObjectName('status_label')
-        help_text.setStyleSheet(
-            f'color: {TEXT_DIM}; font-size: 12px; line-height: 1.6;'
-        )
-        layout.addWidget(help_text)
+        shortcuts = [
+            ('ESPACE', 'Stop moteurs'),
+            ('8 / 9 / 0', 'Vitesse'),
+            ('M', 'Retour menu'),
+        ]
+        for key_text, desc in shortcuts:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            k = QLabel(key_text)
+            k.setStyleSheet(
+                f'color: {TEXT}; font-size: 11px; font-weight: 700; '
+                f'letter-spacing: 2px; min-width: 80px;'
+            )
+            d = QLabel(desc)
+            d.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 12px;')
+            row.addWidget(k)
+            row.addWidget(d)
+            row.addStretch(1)
+            layout.addLayout(row)
 
         layout.addStretch(1)
 
@@ -794,13 +843,11 @@ class RacePage(QWidget):
             return
 
         if key in SPEED_LEVELS:
-            speed_val, level_label = SPEED_LEVELS[key]
+            speed_val, _ = SPEED_LEVELS[key]
             self.speed = speed_val
             for k, ind in self.speed_indicators.items():
                 ind.setActive(k == key)
-            self.speed_label.setText(
-                f'Niveau {level_label}  ·  {int(speed_val*100)} %'
-            )
+            self.speed_label.setText(f'{int(speed_val*100)} %')
             return
 
         if key in MOVEMENT_KEYS:
@@ -852,11 +899,22 @@ class AutonomousPage(QWidget):
         root.setContentsMargins(40, 40, 40, 40)
         root.setSpacing(24)
 
-        # En-tête
+        # En-tête : badge auto (cyan, dot pulse)
         header = QHBoxLayout()
-        badge = QLabel('● AUTONOME')
-        badge.setObjectName('mode_badge_auto')
-        header.addWidget(badge)
+        badge_wrap = QFrame()
+        badge_wrap.setStyleSheet(
+            f'background-color: {ACCENT}; border-radius: 14px;'
+        )
+        badge_lay = QHBoxLayout(badge_wrap)
+        badge_lay.setContentsMargins(12, 4, 16, 4)
+        badge_lay.setSpacing(8)
+        badge_lay.addWidget(PulsingDot(BG_DEEP, size=10))
+        badge_text = QLabel('AUTONOME')
+        badge_text.setStyleSheet(
+            f'color: {BG_DEEP}; font-size: 11px; font-weight: 800; letter-spacing: 4px;'
+        )
+        badge_lay.addWidget(badge_text)
+        header.addWidget(badge_wrap)
         header.addStretch(1)
         back = QPushButton('← MENU PRINCIPAL')
         back.setObjectName('ghost_btn')
@@ -892,6 +950,17 @@ class AutonomousPage(QWidget):
             f'color: {TEXT_MUTED}; font-size: 22px; '
             f'font-weight: 600; letter-spacing: 4px;'
         )
+        # Effet d'opacité pour pulse quand détecté
+        self._aruco_eff = QGraphicsOpacityEffect(self.aruco_status)
+        self._aruco_eff.setOpacity(1.0)
+        self.aruco_status.setGraphicsEffect(self._aruco_eff)
+        self._aruco_anim = QPropertyAnimation(self._aruco_eff, b'opacity')
+        self._aruco_anim.setDuration(1200)
+        self._aruco_anim.setKeyValueAt(0.0, 1.0)
+        self._aruco_anim.setKeyValueAt(0.5, 0.45)
+        self._aruco_anim.setKeyValueAt(1.0, 1.0)
+        self._aruco_anim.setLoopCount(-1)
+        self._aruco_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
         aruco_layout.addWidget(self.aruco_status)
 
         info_row = QHBoxLayout()
@@ -934,6 +1003,8 @@ class AutonomousPage(QWidget):
                 f'color: {ACCENT_2}; font-size: 22px; '
                 f'font-weight: 800; letter-spacing: 4px;'
             )
+            if self._aruco_anim.state() != QPropertyAnimation.State.Running:
+                self._aruco_anim.start()
             self.aruco_id.setText(f'ID  {marker_id}')
             self.aruco_pos.setText(f'POSITION  ({cx:.0f}, {cy:.0f})')
             self.aruco_area.setText(f'AIRE  {area:.0f} px²')
@@ -950,6 +1021,9 @@ class AutonomousPage(QWidget):
                 f'color: {TEXT_MUTED}; font-size: 22px; '
                 f'font-weight: 600; letter-spacing: 4px;'
             )
+            if self._aruco_anim.state() == QPropertyAnimation.State.Running:
+                self._aruco_anim.stop()
+                self._aruco_eff.setOpacity(1.0)
             self.aruco_id.setText('ID  —')
             self.aruco_pos.setText('POSITION  —')
             self.aruco_area.setText('AIRE  —')
@@ -1076,6 +1150,8 @@ class MainWindow(QMainWindow):
         mode_lbl = QLabel('MODE')
         mode_lbl.setObjectName('footer_label')
         lay.addWidget(mode_lbl)
+        self.footer_dot = PulsingDot(ACCENT, size=10)
+        lay.addWidget(self.footer_dot)
         self.footer_mode = QLabel('IDLE')
         self.footer_mode.setObjectName('footer_value')
         lay.addWidget(self.footer_mode)
@@ -1087,26 +1163,38 @@ class MainWindow(QMainWindow):
     def _set_mode(self, mode: str):
         self.bridge.publish_mode(mode)
         self.footer_mode.setText(mode.upper())
+        # Couleur du dot footer selon le mode
+        color_map = {
+            'idle': TEXT_MUTED,
+            'race': PRIMARY,
+            'autonomous': ACCENT_2,
+            'arm': ACCENT,
+        }
+        self.footer_dot.set_color(color_map.get(mode, ACCENT), size=10)
+
+    def _switch_page(self, page: QWidget):
+        self.stack.setCurrentWidget(page)
+        fade_in(page, duration=300)
 
     def show_menu(self):
         self._set_mode('idle')
-        self.stack.setCurrentWidget(self.page_menu)
+        self._switch_page(self.page_menu)
 
     def show_teleop_menu(self):
-        self.stack.setCurrentWidget(self.page_teleop)
+        self._switch_page(self.page_teleop)
 
     def show_race(self):
         self._set_mode('race')
-        self.stack.setCurrentWidget(self.page_race)
+        self._switch_page(self.page_race)
         self.page_race.setFocus()
 
     def show_autonomous(self):
         self._set_mode('autonomous')
-        self.stack.setCurrentWidget(self.page_autonomous)
+        self._switch_page(self.page_autonomous)
 
     def show_arm(self):
         self._set_mode('arm')
-        self.stack.setCurrentWidget(self.page_arm)
+        self._switch_page(self.page_arm)
 
     def closeEvent(self, event):
         self.bridge.publish_mode('idle')
