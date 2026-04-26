@@ -440,6 +440,50 @@ class GlowCard(QFrame):
         p.end()
 
 
+class GlowButton(QPushButton):
+    """QPushButton dont la bordure respire indépendamment."""
+
+    def __init__(self, text: str, phase_offset: float = 0.0,
+                 glow_color: tuple = (200, 35, 35), border_radius: float = 16.0):
+        super().__init__(text)
+        self._phase = phase_offset
+        self._gr, self._gg, self._gb = glow_color
+        self._br = border_radius - 0.5
+        timer = QTimer(self)
+        timer.timeout.connect(self._tick)
+        timer.start(40)
+
+    def _tick(self):
+        self._phase = (self._phase + 0.063) % (2 * math.pi)
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        t = (math.sin(self._phase) + 1) / 2
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+
+        if t > 0.05:
+            pen = QPen(QColor(self._gr, self._gg, self._gb, int(t * 30)))
+            pen.setWidthF(3.5)
+            p.setPen(pen)
+            p.drawRoundedRect(rect, self._br, self._br)
+
+        a = t * 0.5
+        pen = QPen(QColor(
+            int(0x1E + (self._gr - 0x1E) * a),
+            int(0x2E + (self._gg - 0x2E) * a),
+            int(0x4A + (self._gb - 0x4A) * a),
+        ))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawRoundedRect(rect, self._br, self._br)
+        p.end()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ANIMATIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -516,25 +560,19 @@ class MenuPage(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-        layout.addSpacing(32)
+        layout.addSpacing(40)
 
-        card = GlowCard(phase_offset=0.0, glow_color=_RED_GLOW)
-        card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(32, 28, 32, 28)
-        card_lay.setSpacing(14)
-
-        for text, slot, obj_name in [
-            ('AUTONOME', on_autonomous, 'menu_btn'),
-            ('TÉLÉOPÉRATION', on_teleop, 'menu_btn'),
-            ('QUITTER', on_quit, 'menu_btn_quit'),
-        ]:
-            btn = QPushButton(text)
+        for i, (text, slot, obj_name) in enumerate([
+            ('AUTONOME',      on_autonomous, 'menu_btn'),
+            ('TÉLÉOPÉRATION', on_teleop,     'menu_btn'),
+            ('QUITTER',       on_quit,       'menu_btn_quit'),
+        ]):
+            btn = GlowButton(text, phase_offset=i * 2 * math.pi / 3, glow_color=_RED_GLOW)
             btn.setObjectName(obj_name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(slot)
-            card_lay.addWidget(btn)
+            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(3)
 
 
@@ -564,31 +602,26 @@ class TeleopMenuPage(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-        layout.addSpacing(32)
+        layout.addSpacing(40)
 
-        card = GlowCard(phase_offset=math.pi * 0.7, glow_color=_RED_GLOW)
-        card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(32, 28, 32, 28)
-        card_lay.setSpacing(14)
-
-        for text, slot, obj_name in [
-            ('RACE  ·  FPV', on_race, 'menu_btn'),
-            ('BRAS  ·  RAMASSAGE', on_arm, 'menu_btn'),
-        ]:
-            btn = QPushButton(text)
+        for i, (text, slot, obj_name) in enumerate([
+            ('RACE  ·  FPV',      on_race, 'menu_btn'),
+            ('BRAS  ·  RAMASSAGE', on_arm,  'menu_btn'),
+        ]):
+            btn = GlowButton(text, phase_offset=i * math.pi, glow_color=_RED_GLOW)
             btn.setObjectName(obj_name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(slot)
-            card_lay.addWidget(btn)
+            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addSpacing(28)
 
         back_btn = QPushButton('← MENU PRINCIPAL')
         back_btn.setObjectName('ghost_btn')
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.clicked.connect(on_back)
-        card_lay.addSpacing(8)
-        card_lay.addWidget(back_btn)
+        layout.addWidget(back_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(3)
 
     def keyPressEvent(self, event: QKeyEvent):
