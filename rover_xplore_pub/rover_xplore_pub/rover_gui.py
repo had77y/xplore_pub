@@ -802,7 +802,7 @@ class RacePage(QWidget):
 
         layout.addStretch(1)
 
-        back = QPushButton('← MENU PRINCIPAL')
+        back = QPushButton('← TÉLÉOPÉRATION')
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self.on_back)
@@ -1490,7 +1490,7 @@ class ArmPage(QWidget):
         badge.setObjectName('mode_badge')
         header.addWidget(badge)
         header.addStretch(1)
-        back = QPushButton('← MENU PRINCIPAL')
+        back = QPushButton('← TÉLÉOPÉRATION')
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._on_back)
@@ -1540,9 +1540,9 @@ class MainWindow(QMainWindow):
 
         self.page_menu      = MenuPage(on_autonomous=self.show_autonomous, on_teleop=self.show_teleop_menu, on_quit=self.close)
         self.page_teleop    = TeleopMenuPage(on_race=self.show_race, on_arm=self.show_arm, on_back=self.show_menu)
-        self.page_race      = RacePage(bridge, on_back=self.show_menu)
+        self.page_race      = RacePage(bridge, on_back=self.show_teleop_menu)
         self.page_autonomous = AutonomousPage(bridge, on_back=self.show_menu)
-        self.page_arm       = ArmPage(on_back=self.show_menu)
+        self.page_arm       = ArmPage(on_back=self.show_teleop_menu)
 
         for page in (self.page_menu, self.page_teleop, self.page_race, self.page_autonomous, self.page_arm):
             self.stack.addWidget(page)
