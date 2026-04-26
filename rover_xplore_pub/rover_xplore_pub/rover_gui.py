@@ -389,14 +389,19 @@ def make_section_label(text: str) -> QLabel:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class GlowCard(QFrame):
-    """QFrame dont la bordure respire lentement vers un teal-cyan.
-    Chaque instance a un décalage de phase pour ne jamais pulser en sync.
+    """QFrame dont la bordure respire lentement.
+    glow_color : couleur cible RGB au pic (défaut cyan ACCENT).
+    phase_offset : décalage pour que les cartes ne pulsent jamais ensemble.
     """
 
-    def __init__(self, phase_offset: float = 0.0):
+    # Cyan ACCENT par défaut
+    _CYAN = (0, 174, 239)
+
+    def __init__(self, phase_offset: float = 0.0, glow_color: tuple = _CYAN):
         super().__init__()
         self.setObjectName('glow_card')
         self._phase = phase_offset
+        self._gr, self._gg, self._gb = glow_color
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(40)  # 25 fps
@@ -414,19 +419,19 @@ class GlowCard(QFrame):
         p.setBrush(Qt.BrushStyle.NoBrush)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
 
-        # Halo extérieur — cyan très transparent, visible seulement au pic
+        # Halo extérieur — couleur très transparente, seulement au pic
         if t > 0.05:
-            pen = QPen(QColor(0, 174, 239, int(t * 30)))
+            pen = QPen(QColor(self._gr, self._gg, self._gb, int(t * 30)))
             pen.setWidthF(3.5)
             p.setPen(pen)
             p.drawRoundedRect(rect, 17.5, 17.5)
 
-        # Bordure principale — interpolation BORDER → teal-cyan
+        # Bordure principale — interpolation BORDER → glow_color
         a = t * 0.5
         pen = QPen(QColor(
-            int(0x1E + (0x00 - 0x1E) * a),
-            int(0x2E + (0xAE - 0x2E) * a),
-            int(0x4A + (0xEF - 0x4A) * a),
+            int(0x1E + (self._gr - 0x1E) * a),
+            int(0x2E + (self._gg - 0x2E) * a),
+            int(0x4A + (self._gb - 0x4A) * a),
         ))
         pen.setWidthF(1.0)
         p.setPen(pen)
@@ -493,6 +498,9 @@ def make_breadcrumb(*parts: str) -> QWidget:
 # PAGE : MENU PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
 
+_RED_GLOW = (200, 35, 35)   # bordeaux — couleur glow pages menu
+
+
 class MenuPage(QWidget):
     def __init__(self, on_autonomous, on_teleop, on_quit):
         super().__init__()
@@ -508,7 +516,12 @@ class MenuPage(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-        layout.addSpacing(40)
+        layout.addSpacing(32)
+
+        card = GlowCard(phase_offset=0.0, glow_color=_RED_GLOW)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(32, 28, 32, 28)
+        card_lay.setSpacing(14)
 
         for text, slot, obj_name in [
             ('AUTONOME', on_autonomous, 'menu_btn'),
@@ -519,8 +532,9 @@ class MenuPage(QWidget):
             btn.setObjectName(obj_name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(slot)
-            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+            card_lay.addWidget(btn)
 
+        layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(3)
 
 
@@ -531,6 +545,9 @@ class MenuPage(QWidget):
 class TeleopMenuPage(QWidget):
     def __init__(self, on_race, on_arm, on_back):
         super().__init__()
+        self._on_back = on_back
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(80, 60, 80, 60)
         layout.setSpacing(28)
@@ -547,7 +564,12 @@ class TeleopMenuPage(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-        layout.addSpacing(40)
+        layout.addSpacing(32)
+
+        card = GlowCard(phase_offset=math.pi * 0.7, glow_color=_RED_GLOW)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(32, 28, 32, 28)
+        card_lay.setSpacing(14)
 
         for text, slot, obj_name in [
             ('RACE  ·  FPV', on_race, 'menu_btn'),
@@ -557,17 +579,27 @@ class TeleopMenuPage(QWidget):
             btn.setObjectName(obj_name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(slot)
-            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+            card_lay.addWidget(btn)
 
-        layout.addSpacing(28)
+        back_btn = QPushButton('← MENU PRINCIPAL')
+        back_btn.setObjectName('ghost_btn')
+        back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_btn.clicked.connect(on_back)
+        card_lay.addSpacing(8)
+        card_lay.addWidget(back_btn)
 
-        back = QPushButton('← MENU PRINCIPAL')
-        back.setObjectName('ghost_btn')
-        back.setCursor(Qt.CursorShape.PointingHandCursor)
-        back.clicked.connect(on_back)
-        layout.addWidget(back, alignment=Qt.AlignmentFlag.AlignCenter)
-
+        layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(3)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_M:
+            self._on_back()
+        else:
+            super().keyPressEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setFocus()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1189,6 +1221,7 @@ class AutonomousPage(QWidget):
         super().__init__()
         self.bridge = bridge
         self.on_back = on_back
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._aruco_log = []
         self._last_seen = False
 
@@ -1395,6 +1428,16 @@ class AutonomousPage(QWidget):
     def _on_status(self, status: str):
         self.status_label.setText(status)
 
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_M:
+            self.on_back()
+        else:
+            super().keyPressEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setFocus()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE : MODE BRAS
@@ -1403,6 +1446,8 @@ class AutonomousPage(QWidget):
 class ArmPage(QWidget):
     def __init__(self, on_back):
         super().__init__()
+        self._on_back = on_back
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(60, 60, 60, 60)
         layout.setSpacing(24)
@@ -1415,7 +1460,7 @@ class ArmPage(QWidget):
         back = QPushButton('← MENU PRINCIPAL')
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
-        back.clicked.connect(on_back)
+        back.clicked.connect(self._on_back)
         header.addWidget(back)
         layout.addLayout(header)
 
@@ -1425,6 +1470,16 @@ class ArmPage(QWidget):
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(msg)
         layout.addStretch(2)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_M:
+            self._on_back()
+        else:
+            super().keyPressEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setFocus()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
