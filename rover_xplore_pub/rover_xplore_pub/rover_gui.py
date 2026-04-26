@@ -235,6 +235,12 @@ QFrame#card_elevated {{
     border: 1px solid {BORDER_HOVER};
 }}
 
+QFrame#glow_card {{
+    background-color: {BG_SURFACE};
+    border-radius: 18px;
+    border: none;
+}}
+
 QLabel#video {{
     background-color: #050B17;
     border-radius: 12px;
@@ -376,6 +382,57 @@ def make_section_label(text: str) -> QLabel:
     lbl = QLabel(text.upper())
     lbl.setObjectName('section')
     return lbl
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WIDGET : CARTE ANIMÉE — bordure respirante
+# ══════════════════════════════════════════════════════════════════════════════
+
+class GlowCard(QFrame):
+    """QFrame dont la bordure respire lentement vers un teal-cyan.
+    Chaque instance a un décalage de phase pour ne jamais pulser en sync.
+    """
+
+    def __init__(self, phase_offset: float = 0.0):
+        super().__init__()
+        self.setObjectName('glow_card')
+        self._phase = phase_offset
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)  # 25 fps
+
+    def _tick(self):
+        self._phase = (self._phase + 0.063) % (2 * math.pi)  # cycle ~4 s
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        t = (math.sin(self._phase) + 1) / 2  # 0..1
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+
+        # Halo extérieur — cyan très transparent, visible seulement au pic
+        if t > 0.05:
+            pen = QPen(QColor(0, 174, 239, int(t * 30)))
+            pen.setWidthF(3.5)
+            p.setPen(pen)
+            p.drawRoundedRect(rect, 17.5, 17.5)
+
+        # Bordure principale — interpolation BORDER → teal-cyan
+        a = t * 0.5
+        pen = QPen(QColor(
+            int(0x1E + (0x00 - 0x1E) * a),
+            int(0x2E + (0xAE - 0x2E) * a),
+            int(0x4A + (0xEF - 0x4A) * a),
+        ))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.drawRoundedRect(rect, 17.5, 17.5)
+
+        p.end()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -802,6 +859,9 @@ class MapWidget(QWidget):
         self._robot = (10, 7)
         self._visited: set[tuple[int, int]] = {(10, 7)}
         self.setMinimumSize(200, 160)
+        scan_timer = QTimer(self)
+        scan_timer.timeout.connect(self.update)
+        scan_timer.start(50)
 
     def update_position(self, col: int, row: int):
         self._robot = (col, row)
@@ -848,6 +908,17 @@ class MapWidget(QWidget):
         for c in range(self.COLS + 1):
             x = x0 + c * cs
             p.drawLine(QPointF(x, y0), QPointF(x, y0 + gh))
+
+        # Ligne de scan — balayage horizontal lent (sonar)
+        scan_t = (time.time() % 6.0) / 6.0  # cycle 6 s
+        scan_y = y0 + scan_t * gh
+        scan_alpha = int(55 * math.sin(scan_t * math.pi))
+        if scan_alpha > 0:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            pen = QPen(QColor(0, 174, 239, scan_alpha))
+            pen.setWidthF(1.5)
+            p.setPen(pen)
+            p.drawLine(QPointF(x0, scan_y), QPointF(x0 + gw, scan_y))
 
         # Marqueur rover
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -902,14 +973,13 @@ class _SensorCell(QFrame):
             )
 
 
-class USSensorsCard(QFrame):
+class USSensorsCard(GlowCard):
     """5 capteurs US — disposition spatiale FL/FC/FR | L/R.
     Les données arriveront via /distances quand le node US sera prêt.
     """
 
-    def __init__(self):
-        super().__init__()
-        self.setObjectName('card')
+    def __init__(self, phase_offset: float = 0.0):
+        super().__init__(phase_offset=phase_offset)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -983,14 +1053,13 @@ class _IMUValue(QWidget):
         )
 
 
-class IMUCard(QFrame):
+class IMUCard(GlowCard):
     """IMU — accélération x/y/z + angle yaw.
     Les données arriveront via /imu quand le node IMU sera prêt.
     """
 
-    def __init__(self):
-        super().__init__()
-        self.setObjectName('card')
+    def __init__(self, phase_offset: float = 0.0):
+        super().__init__(phase_offset=phase_offset)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -1069,13 +1138,12 @@ class _CameraOverlay(QFrame):
         self.video.setPixmap(QPixmap.fromImage(scaled))
 
 
-class CameraThumb(QFrame):
+class CameraThumb(GlowCard):
     """Miniature flux caméra — clic pour agrandir."""
 
-    def __init__(self, on_expand):
-        super().__init__()
+    def __init__(self, on_expand, phase_offset: float = 0.0):
+        super().__init__(phase_offset=phase_offset)
         self._on_expand = on_expand
-        self.setObjectName('card')
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedWidth(220)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -1182,9 +1250,8 @@ class AutonomousPage(QWidget):
 
         return hdr
 
-    def _build_left_panel(self) -> QFrame:
-        card = QFrame()
-        card.setObjectName('card')
+    def _build_left_panel(self) -> GlowCard:
+        card = GlowCard(phase_offset=0.0)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(0)
@@ -1208,13 +1275,13 @@ class AutonomousPage(QWidget):
         bottom = QHBoxLayout()
         bottom.setSpacing(12)
 
-        self._cam_thumb = CameraThumb(on_expand=self._expand_camera)
+        self._cam_thumb = CameraThumb(on_expand=self._expand_camera, phase_offset=2 * math.pi * 2 / 5)
         bottom.addWidget(self._cam_thumb)
 
         sensors = QVBoxLayout()
         sensors.setSpacing(10)
-        self.us_card  = USSensorsCard()
-        self.imu_card = IMUCard()
+        self.us_card  = USSensorsCard(phase_offset=2 * math.pi * 3 / 5)
+        self.imu_card = IMUCard(phase_offset=2 * math.pi * 4 / 5)
         sensors.addWidget(self.us_card, 1)
         sensors.addWidget(self.imu_card, 1)
         bottom.addLayout(sensors, 1)
@@ -1222,9 +1289,8 @@ class AutonomousPage(QWidget):
         lay.addLayout(bottom, 1)
         return w
 
-    def _build_aruco_card(self) -> QFrame:
-        card = QFrame()
-        card.setObjectName('card')
+    def _build_aruco_card(self) -> GlowCard:
+        card = GlowCard(phase_offset=2 * math.pi / 5)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(24, 18, 24, 18)
         lay.setSpacing(12)
