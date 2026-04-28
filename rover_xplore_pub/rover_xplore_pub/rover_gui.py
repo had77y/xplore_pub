@@ -326,7 +326,7 @@ class _RosNode(Node):
 
         # Placeholders à brancher quand les nodes seront prêts :
         #   /distances  Float32MultiArray [fl, fc, fr, l, r]  → USSensorsCard
-        #   /imu        sensor_msgs/Imu                       → IMUCard
+        #   /imu        sensor_msgs/Imu  accel(x,y,z) + gyro(x,y,z)  → IMUCard
 
     def publish_mode(self, mode: str):
         msg = String(); msg.data = mode
@@ -1087,46 +1087,103 @@ class USSensorsCard(GlowCard):
         self._r.set_value(r)
 
 
-class _IMUValue(QWidget):
-    """Label + valeur empilés verticalement."""
+class _IMUSensorRow(QWidget):
+    """Label axe (X/Y/Z) à gauche + valeur numérique alignée à droite."""
 
     def __init__(self, label: str):
         super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 3, 4, 3)
+        lay.setSpacing(6)
 
         lbl = QLabel(label)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 2px;')
-
+        lbl.setFixedWidth(14)
+        lbl.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 11px; font-weight: 600; font-family: monospace;'
+        )
         self._val = QLabel('—')
-        self._val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._val.setStyleSheet(
-            f'color: {TEXT_MUTED}; font-size: 12px; font-weight: 700; font-family: monospace;'
+            f'color: {TEXT_MUTED}; font-size: 14px; font-weight: 700; font-family: monospace;'
         )
-
         lay.addWidget(lbl)
-        lay.addWidget(self._val)
+        lay.addWidget(self._val, 1)
 
-    def set_value(self, text: str):
-        self._val.setText(text)
+    def set_value(self, val: float):
+        self._val.setText(f'{val:+.3f}')
         self._val.setStyleSheet(
-            f'color: {ACCENT_2}; font-size: 12px; font-weight: 700; font-family: monospace;'
+            f'color: {ACCENT}; font-size: 14px; font-weight: 700; font-family: monospace;'
         )
+
+    def reset(self):
+        self._val.setText('—')
+        self._val.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 14px; font-weight: 700; font-family: monospace;'
+        )
+
+
+class _IMUSensorSection(QFrame):
+    """Bloc capteur IMU : titre [unité] + axes X/Y/Z + ligne magnitude."""
+
+    def __init__(self, title: str, unit: str):
+        super().__init__()
+        self.setStyleSheet(
+            f'QFrame {{ background-color: {BG_ELEVATED}; border-radius: 10px;'
+            f' border: 1px solid {BORDER}; }}'
+            f'QLabel {{ background: transparent; border: none; }}'
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(4)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(4)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(
+            f'color: {TEXT}; font-size: 10px; font-weight: 700; letter-spacing: 2px;'
+        )
+        unit_lbl = QLabel(f'[{unit}]')
+        unit_lbl.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 9px; font-weight: 500;')
+        hdr.addWidget(title_lbl)
+        hdr.addWidget(unit_lbl)
+        hdr.addStretch(1)
+        lay.addLayout(hdr)
+
+        self._x = _IMUSensorRow('X')
+        self._y = _IMUSensorRow('Y')
+        self._z = _IMUSensorRow('Z')
+        for row in (self._x, self._y, self._z):
+            lay.addWidget(row)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f'background: {BORDER}; border: none; max-height: 1px;')
+        lay.addWidget(sep)
+
+        self._mag = QLabel('≈ —')
+        self._mag.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._mag.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 9px; font-family: monospace; letter-spacing: 1px;'
+        )
+        lay.addWidget(self._mag)
+
+    def set_values(self, x: float, y: float, z: float, unit_suffix: str = ''):
+        mag = math.sqrt(x * x + y * y + z * z)
+        self._x.set_value(x)
+        self._y.set_value(y)
+        self._z.set_value(z)
+        self._mag.setText(f'≈ {mag:.3f}{(" " + unit_suffix) if unit_suffix else ""}')
 
 
 class IMUCard(GlowCard):
-    """IMU — accélération x/y/z + angle yaw.
-    Les données arriveront via /imu quand le node IMU sera prêt.
-    """
+    """Accélération (m/s²) + Gyroscope (°/s) — données via /imu."""
 
     def __init__(self, phase_offset: float = 0.0):
         super().__init__(phase_offset=phase_offset)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(7)
+        lay.setSpacing(8)
 
         hdr = QHBoxLayout()
         hdr.addWidget(make_section_label('IMU'))
@@ -1136,21 +1193,18 @@ class IMUCard(GlowCard):
         hdr.addWidget(placeholder)
         lay.addLayout(hdr)
 
-        row = QHBoxLayout()
-        row.setSpacing(4)
-        self._ax  = _IMUValue('Ax  m/s²')
-        self._ay  = _IMUValue('Ay  m/s²')
-        self._az  = _IMUValue('Az  m/s²')
-        self._yaw = _IMUValue('Yaw  °')
-        for w in (self._ax, self._ay, self._az, self._yaw):
-            row.addWidget(w)
-        lay.addLayout(row)
+        sensors_row = QHBoxLayout()
+        sensors_row.setSpacing(8)
+        self._accel = _IMUSensorSection('ACCÉLÉRATION', 'm/s²')
+        self._gyro  = _IMUSensorSection('GYROSCOPE', '°/s')
+        sensors_row.addWidget(self._accel)
+        sensors_row.addWidget(self._gyro)
+        lay.addLayout(sensors_row)
 
-    def set_values(self, ax: float, ay: float, az: float, yaw: float):
-        self._ax.set_value(f'{ax:+.2f}')
-        self._ay.set_value(f'{ay:+.2f}')
-        self._az.set_value(f'{az:+.2f}')
-        self._yaw.set_value(f'{yaw:.1f}°')
+    def set_values(self, ax: float, ay: float, az: float,
+                   gx: float, gy: float, gz: float):
+        self._accel.set_values(ax, ay, az, 'm/s²')
+        self._gyro.set_values(gx, gy, gz, '°/s')
 
 
 class _CameraOverlay(QFrame):
