@@ -297,6 +297,10 @@ class RosBridge(QObject):
     def publish_cmd(self, linear: float, angular: float):
         self._node.publish_cmd(linear, angular)
 
+    def publish_arm_cmd(self, z: float, y: float, pince: float,
+                        speed: float, dump: bool = False, bin_dir: float = 0.0):
+        self._node.publish_arm_cmd(z, y, pince, speed, dump, bin_dir)
+
     def destroy_node(self):
         self._node.destroy_node()
 
@@ -312,6 +316,7 @@ class _RosNode(Node):
 
         self.pub_mode = self.create_publisher(String, '/rover/mode', 10)
         self.pub_cmd  = self.create_publisher(Twist,  '/rover/cmd_vel', 10)
+        self.pub_arm  = self.create_publisher(Float32MultiArray, '/rover/arm_cmd', 10)
 
         self.create_subscription(
             CompressedImage, '/camera/image_compressed',
@@ -337,6 +342,17 @@ class _RosNode(Node):
         msg.linear.x  = float(linear)
         msg.angular.z = float(angular)
         self.pub_cmd.publish(msg)
+
+    def publish_arm_cmd(self, z: float, y: float, pince: float,
+                        speed: float, dump: bool = False, bin_dir: float = 0.0):
+        msg = Float32MultiArray()
+        msg.data = [
+            float(z), float(y), float(pince),
+            float(speed),
+            1.0 if dump else 0.0,
+            float(bin_dir),
+        ]
+        self.pub_arm.publish(msg)
 
     def _on_image(self, msg: CompressedImage):
         buf = np.frombuffer(msg.data, dtype=np.uint8)
@@ -1527,45 +1543,476 @@ class AutonomousPage(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTES MODE BRAS
+# ══════════════════════════════════════════════════════════════════════════════
+
+ARM_SPEED_LEVELS = {
+    Qt.Key.Key_6: (0.10, '6'),
+    Qt.Key.Key_7: (0.25, '7'),
+    Qt.Key.Key_8: (0.50, '8'),
+    Qt.Key.Key_9: (0.75, '9'),
+    Qt.Key.Key_0: (1.00, '0'),
+}
+
+ARM_AXIS_TIMEOUT = 0.20
+
+# key → (z_dir, y_dir, pince_dir, bin_dir)
+ARM_MOVE_KEYS = {
+    Qt.Key.Key_O:    ( 1.0,  0.0,  0.0,  0.0),   # Z monter
+    Qt.Key.Key_K:    (-1.0,  0.0,  0.0,  0.0),   # Z descendre
+    Qt.Key.Key_P:    ( 0.0,  1.0,  0.0,  0.0),   # Y pivot +
+    Qt.Key.Key_I:    ( 0.0, -1.0,  0.0,  0.0),   # Y dépivot
+    Qt.Key.Key_J:    ( 0.0,  0.0,  1.0,  0.0),   # Pince ouvrir
+    Qt.Key.Key_L:    ( 0.0,  0.0, -1.0,  0.0),   # Pince fermer
+    Qt.Key.Key_Up:   ( 0.0,  0.0,  0.0,  1.0),   # Benne monter
+    Qt.Key.Key_Down: ( 0.0,  0.0,  0.0, -1.0),   # Benne descendre
+}
+
+_AMBER = (255, 140, 0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PAGE : MODE BRAS
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ArmPage(QWidget):
-    def __init__(self, on_back):
+    def __init__(self, bridge: RosBridge, on_back):
         super().__init__()
+        self.bridge = bridge
         self._on_back = on_back
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(60, 60, 60, 60)
-        layout.setSpacing(24)
 
-        header = QHBoxLayout()
-        badge = QLabel('BRAS')
-        badge.setObjectName('mode_badge')
-        header.addWidget(badge)
-        header.addStretch(1)
+        # ── Rover motion state ──
+        self.linear = 0.0
+        self.angular = 0.0
+        self.last_linear_t = 0.0
+        self.last_angular_t = 0.0
+        self.active_rover_keys: set = set()
+
+        # ── Arm state ──
+        self.arm_z = 0.0
+        self.arm_y = 0.0
+        self.arm_pince = 0.0
+        self.bin_dir = 0.0
+        self.last_z_t = 0.0
+        self.last_y_t = 0.0
+        self.last_pince_t = 0.0
+        self.last_bin_t = 0.0
+        self.active_arm_keys: set = set()
+
+        # ── Vitesse partagée rover + bras ──
+        self.speed = 0.50   # défaut niveau 8
+        self._dump_pending = False
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(32, 28, 32, 28)
+        root.setSpacing(28)
+        root.addWidget(self._build_left_panel(), 0)
+        root.addWidget(self._build_right_panel(), 1)
+
+        bridge.frame_ready.connect(self._on_frame)
+
+        self.cmd_timer = QTimer(self)
+        self.cmd_timer.timeout.connect(self._send_cmds)
+        self.cmd_timer.start(100)
+
+    # ── Construction panneau gauche ────────────────────────────────────────────
+
+    def _build_left_panel(self) -> QWidget:
+        card = GlowCard(phase_offset=math.pi / 3, glow_color=(0, 174, 239))
+        card.setFixedWidth(390)
+
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(14)
+
+        # Badge BRAS
+        hdr = QHBoxLayout()
+        badge_wrap = QFrame()
+        badge_wrap.setStyleSheet(f'background-color: {ACCENT}; border-radius: 14px;')
+        badge_lay = QHBoxLayout(badge_wrap)
+        badge_lay.setContentsMargins(12, 4, 16, 4)
+        badge_lay.setSpacing(8)
+        badge_lay.addWidget(PulsingDot(BG_DEEP, size=10))
+        badge_txt = QLabel('BRAS')
+        badge_txt.setStyleSheet(
+            f'color: {BG_DEEP}; font-size: 11px; font-weight: 800; letter-spacing: 4px;'
+        )
+        badge_lay.addWidget(badge_txt)
+        hdr.addWidget(badge_wrap)
+        hdr.addStretch(1)
+        lay.addLayout(hdr)
+
+        # Vitesse
+        lay.addWidget(make_section_label('Vitesse'))
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(8)
+        self.speed_indicators = {}
+        for key, (val, label) in ARM_SPEED_LEVELS.items():
+            ind = KeyIndicator(label)
+            self.speed_indicators[key] = ind
+            speed_row.addWidget(ind)
+        speed_row.addStretch(1)
+        lay.addLayout(speed_row)
+
+        self.speed_label = QLabel('Niveau : 8  (50%)')
+        self.speed_label.setStyleSheet(
+            f'color: {TEXT_DIM}; font-size: 13px; font-weight: 500; letter-spacing: 1px;'
+        )
+        lay.addWidget(self.speed_label)
+
+        lay.addWidget(self._make_sep())
+
+        # Mouvement rover
+        lay.addWidget(make_section_label('Mouvement rover'))
+        grid = QGridLayout()
+        grid.setSpacing(7)
+        grid.setContentsMargins(0, 0, 0, 0)
+        self.move_indicators = {}
+        for qkey, r, c, lbl in [
+            (Qt.Key.Key_Q, 0, 0, 'Q'), (Qt.Key.Key_W, 0, 1, 'W'), (Qt.Key.Key_E, 0, 2, 'E'),
+            (Qt.Key.Key_A, 1, 0, 'A'), (Qt.Key.Key_S, 1, 1, 'S'), (Qt.Key.Key_D, 1, 2, 'D'),
+            (Qt.Key.Key_Y, 2, 0, 'Y'),                              (Qt.Key.Key_X, 2, 2, 'X'),
+        ]:
+            ind = KeyIndicator(lbl)
+            self.move_indicators[qkey] = ind
+            grid.addWidget(ind, r, c)
+        grid_holder = QHBoxLayout()
+        grid_holder.addLayout(grid)
+        grid_holder.addStretch(1)
+        lay.addLayout(grid_holder)
+
+        lay.addWidget(self._make_sep())
+
+        # Contrôle bras
+        lay.addWidget(make_section_label('Contrôle bras'))
+        lay.addLayout(self._build_arm_controls())
+
+        lay.addWidget(self._make_sep())
+
+        # Bouton VIDAGE
+        lay.addWidget(self._build_dump_button())
+
+        lay.addWidget(self._make_sep())
+
+        # Raccourcis
+        lay.addWidget(make_section_label('Raccourcis'))
+        for key_text, desc in [
+            ('ESPACE', 'Stop tout'),
+            ('6 / 7 / 8 / 9 / 0', 'Vitesse'),
+            ('M', 'Retour menu'),
+        ]:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            k = QLabel(key_text)
+            k.setStyleSheet(
+                f'color: {TEXT}; font-size: 11px; font-weight: 700;'
+                f'letter-spacing: 2px; min-width: 90px;'
+            )
+            d = QLabel(desc)
+            d.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 12px;')
+            row.addWidget(k)
+            row.addWidget(d)
+            row.addStretch(1)
+            lay.addLayout(row)
+
+        lay.addStretch(1)
+
         back = GlowButton('← TÉLÉOPÉRATION', glow_color=(0, 174, 239), border_radius=10)
         back.setObjectName('ghost_btn')
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._on_back)
-        header.addWidget(back)
-        layout.addLayout(header)
+        lay.addWidget(back)
 
-        layout.addStretch(1)
-        msg = QLabel('Module bras — à implémenter')
-        msg.setObjectName('subtitle')
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(msg)
-        layout.addStretch(2)
+        return card
+
+    def _make_sep(self) -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f'background: {BORDER}; border: none; max-height: 1px;')
+        return sep
+
+    def _build_arm_controls(self) -> QGridLayout:
+        """Grille 3 axes × 2 touches + indicateur de direction."""
+        g = QGridLayout()
+        g.setSpacing(8)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setColumnStretch(3, 1)
+
+        self.arm_indicators = {}
+        self._axis_labels: dict[str, QLabel] = {}
+
+        axes = [
+            ('AXE Z',  Qt.Key.Key_O,    'O', Qt.Key.Key_K,    'K', 'arm_z',    '↑', '↓'),
+            ('AXE Y',  Qt.Key.Key_P,    'P', Qt.Key.Key_I,    'I', 'arm_y',    '↺', '↻'),
+            ('PINCES', Qt.Key.Key_J,    'J', Qt.Key.Key_L,    'L', 'arm_pince','◁', '▷'),
+            ('BENNE',  Qt.Key.Key_Up,   '↑', Qt.Key.Key_Down, '↓', 'bin_dir', '↑', '↓'),
+        ]
+        for row_i, (axis_name, k_pos, l_pos, k_neg, l_neg, attr, sym_p, sym_n) in enumerate(axes):
+            lbl = QLabel(axis_name)
+            lbl.setFixedWidth(52)
+            lbl.setStyleSheet(
+                f'color: {TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 2px;'
+            )
+            g.addWidget(lbl, row_i, 0)
+
+            ind_pos = KeyIndicator(l_pos)
+            self.arm_indicators[k_pos] = ind_pos
+            g.addWidget(ind_pos, row_i, 1)
+
+            ind_neg = KeyIndicator(l_neg)
+            self.arm_indicators[k_neg] = ind_neg
+            g.addWidget(ind_neg, row_i, 2)
+
+            status = QLabel('—')
+            status.setStyleSheet(
+                f'color: {TEXT_MUTED}; font-size: 20px; font-weight: 700; padding-left: 10px;'
+            )
+            self._axis_labels[attr] = status
+            g.addWidget(status, row_i, 3)
+
+        return g
+
+    def _build_dump_button(self) -> QPushButton:
+        self._dump_btn = QPushButton('⬇  POSITION DE VIDAGE')
+        self._dump_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._dump_btn.setFixedHeight(52)
+        self._dump_btn.setStyleSheet(
+            f'QPushButton {{'
+            f'  background-color: #1E1000;'
+            f'  border: 1px solid #FF8C00;'
+            f'  border-radius: 14px;'
+            f'  font-size: 12px; font-weight: 700; letter-spacing: 3px;'
+            f'  color: #FF8C00;'
+            f'}}'
+            f'QPushButton:hover {{'
+            f'  background-color: #2E1800;'
+            f'  border-color: #FFA500; color: #FFA500;'
+            f'}}'
+            f'QPushButton:pressed {{'
+            f'  background-color: #FF8C00; color: {BG_DEEP};'
+            f'}}'
+            f'QPushButton:disabled {{'
+            f'  background-color: #0E0800;'
+            f'  border-color: #553300; color: #553300;'
+            f'}}'
+        )
+        self._dump_btn.clicked.connect(self._on_dump)
+        return self._dump_btn
+
+    # ── Construction panneau droit ─────────────────────────────────────────────
+
+    def _build_right_panel(self) -> QWidget:
+        card = GlowCard(phase_offset=math.pi + math.pi / 3, glow_color=(0, 174, 239))
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(28, 28, 28, 28)
+        lay.setSpacing(18)
+
+        hdr = QHBoxLayout()
+        title = QLabel('FLUX CAMÉRA  ·  BRAS')
+        title.setObjectName('section')
+        hdr.addWidget(title)
+        hdr.addStretch(1)
+        self.fps_label = QLabel('— FPS')
+        self.fps_label.setObjectName('status_value')
+        hdr.addWidget(self.fps_label)
+        lay.addLayout(hdr)
+
+        self.video = QLabel()
+        self.video.setObjectName('video')
+        self.video.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video.setMinimumSize(640, 480)
+        self.video.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video.setText('En attente du flux caméra…')
+        lay.addWidget(self.video, 1)
+
+        self._frame_times: list[float] = []
+        return card
+
+    # ── Slots ─────────────────────────────────────────────────────────────────
+
+    def _on_frame(self, qimg: QImage):
+        if not self.isVisible():
+            return
+        scaled = qimg.scaled(
+            self.video.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.video.setPixmap(QPixmap.fromImage(scaled))
+        now = time.time()
+        self._frame_times.append(now)
+        self._frame_times = [t for t in self._frame_times if now - t < 1.0]
+        self.fps_label.setText(f'{len(self._frame_times)} FPS')
+
+    def _send_cmds(self):
+        now = time.time()
+        if now - self.last_linear_t > AXIS_TIMEOUT:
+            self.linear = 0.0
+        if now - self.last_angular_t > AXIS_TIMEOUT:
+            self.angular = 0.0
+        if now - self.last_z_t > ARM_AXIS_TIMEOUT:
+            if self.arm_z != 0.0:
+                self.arm_z = 0.0
+                self._refresh_arm_keys()
+        if now - self.last_y_t > ARM_AXIS_TIMEOUT:
+            if self.arm_y != 0.0:
+                self.arm_y = 0.0
+                self._refresh_arm_keys()
+        if now - self.last_pince_t > ARM_AXIS_TIMEOUT:
+            if self.arm_pince != 0.0:
+                self.arm_pince = 0.0
+                self._refresh_arm_keys()
+        if now - self.last_bin_t > ARM_AXIS_TIMEOUT:
+            if self.bin_dir != 0.0:
+                self.bin_dir = 0.0
+                self._refresh_arm_keys()
+
+        self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
+        self.bridge.publish_arm_cmd(
+            self.arm_z, self.arm_y, self.arm_pince,
+            self.speed,
+            dump=self._dump_pending,
+            bin_dir=self.bin_dir,
+        )
+        if self._dump_pending:
+            self._dump_pending = False
+
+    def _on_dump(self):
+        self._dump_pending = True
+        self._dump_btn.setEnabled(False)
+        self._dump_btn.setText('⏳  EN COURS…')
+        QTimer.singleShot(2000, self._reset_dump_btn)
+
+    def _reset_dump_btn(self):
+        self._dump_btn.setEnabled(True)
+        self._dump_btn.setText('⬇  POSITION DE VIDAGE')
+
+    # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_M:
-            self._on_back()
-        else:
-            super().keyPressEvent(event)
+        key = event.key()
+        now = time.time()
+
+        # Navigation
+        if not event.isAutoRepeat():
+            if key == Qt.Key.Key_M:
+                self._on_back()
+                return
+            if key == Qt.Key.Key_Space:
+                self.linear = self.angular = 0.0
+                self.last_linear_t = self.last_angular_t = 0.0
+                self.arm_z = self.arm_y = self.arm_pince = self.bin_dir = 0.0
+                self.last_z_t = self.last_y_t = self.last_pince_t = self.last_bin_t = 0.0
+                self.active_rover_keys.clear()
+                self.active_arm_keys.clear()
+                self._refresh_rover_keys()
+                self._refresh_arm_keys()
+                return
+            if key in ARM_SPEED_LEVELS:
+                speed_val, label = ARM_SPEED_LEVELS[key]
+                self.speed = speed_val
+                for k, ind in self.speed_indicators.items():
+                    ind.setActive(k == key)
+                self.speed_label.setText(f'Niveau : {label}  ({int(speed_val * 100)}%)')
+                return
+
+        # Bras + benne : auto-repeat autorisé pour mouvement continu
+        if key in ARM_MOVE_KEYS:
+            z_dir, y_dir, pince_dir, bin_d = ARM_MOVE_KEYS[key]
+            if z_dir != 0.0:
+                self.arm_z = z_dir
+                self.last_z_t = now
+            if y_dir != 0.0:
+                self.arm_y = y_dir
+                self.last_y_t = now
+            if pince_dir != 0.0:
+                self.arm_pince = pince_dir
+                self.last_pince_t = now
+            if bin_d != 0.0:
+                self.bin_dir = bin_d
+                self.last_bin_t = now
+            self.active_arm_keys.add(key)
+            self._refresh_arm_keys()
+            return
+
+        # Rover : auto-repeat filtré
+        if event.isAutoRepeat():
+            return
+        if key in MOVEMENT_KEYS:
+            lin, ang = MOVEMENT_KEYS[key]
+            if lin != 0.0:
+                self.linear = lin
+                self.last_linear_t = now
+            if ang != 0.0:
+                self.angular = ang
+                self.last_angular_t = now
+            self.active_rover_keys.add(key)
+            self._refresh_rover_keys()
+
+    def keyReleaseEvent(self, event: QKeyEvent):
+        if event.isAutoRepeat():
+            return
+        key = event.key()
+        if key in ARM_MOVE_KEYS:
+            z_dir, y_dir, pince_dir, bin_d = ARM_MOVE_KEYS[key]
+            if z_dir != 0.0:
+                self.arm_z = 0.0
+                self.last_z_t = 0.0
+            if y_dir != 0.0:
+                self.arm_y = 0.0
+                self.last_y_t = 0.0
+            if pince_dir != 0.0:
+                self.arm_pince = 0.0
+                self.last_pince_t = 0.0
+            if bin_d != 0.0:
+                self.bin_dir = 0.0
+                self.last_bin_t = 0.0
+            self.active_arm_keys.discard(key)
+            self._refresh_arm_keys()
+        elif key in MOVEMENT_KEYS:
+            self.active_rover_keys.discard(key)
+            self._refresh_rover_keys()
+
+    def _refresh_rover_keys(self):
+        for k, ind in self.move_indicators.items():
+            ind.setActive(k in self.active_rover_keys)
+
+    def _refresh_arm_keys(self):
+        for k, ind in self.arm_indicators.items():
+            ind.setActive(k in self.active_arm_keys)
+        self._update_arm_status()
+
+    def _update_arm_status(self):
+        pairs = [
+            ('arm_z',     self.arm_z,     '↑', '↓'),
+            ('arm_y',     self.arm_y,     '↺', '↻'),
+            ('arm_pince', self.arm_pince, '◁', '▷'),
+            ('bin_dir',   self.bin_dir,   '↑', '↓'),
+        ]
+        for attr, val, sym_pos, sym_neg in pairs:
+            lbl = self._axis_labels[attr]
+            if val > 0.0:
+                lbl.setText(sym_pos)
+                lbl.setStyleSheet(
+                    f'color: {ACCENT_2}; font-size: 20px; font-weight: 700; padding-left: 10px;'
+                )
+            elif val < 0.0:
+                lbl.setText(sym_neg)
+                lbl.setStyleSheet(
+                    f'color: {PRIMARY}; font-size: 20px; font-weight: 700; padding-left: 10px;'
+                )
+            else:
+                lbl.setText('—')
+                lbl.setStyleSheet(
+                    f'color: {TEXT_MUTED}; font-size: 20px; font-weight: 700; padding-left: 10px;'
+                )
 
     def showEvent(self, event):
         super().showEvent(event)
+        for k, ind in self.speed_indicators.items():
+            val, _ = ARM_SPEED_LEVELS[k]
+            ind.setActive(abs(val - self.speed) < 1e-3)
         self.setFocus()
 
 
@@ -1596,7 +2043,7 @@ class MainWindow(QMainWindow):
         self.page_teleop    = TeleopMenuPage(on_race=self.show_race, on_arm=self.show_arm, on_back=self.show_menu)
         self.page_race      = RacePage(bridge, on_back=self.show_teleop_menu)
         self.page_autonomous = AutonomousPage(bridge, on_back=self.show_menu)
-        self.page_arm       = ArmPage(on_back=self.show_teleop_menu)
+        self.page_arm       = ArmPage(bridge, on_back=self.show_teleop_menu)
 
         for page in (self.page_menu, self.page_teleop, self.page_race, self.page_autonomous, self.page_arm):
             self.stack.addWidget(page)
