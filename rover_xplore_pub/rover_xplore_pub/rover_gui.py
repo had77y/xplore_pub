@@ -2136,7 +2136,7 @@ def main(args=None):
     spin_thread.start()
 
     window = MainWindow(bridge)
-    window.show()
+    window.showMaximized()
 
     exit_code = app.exec()
 
