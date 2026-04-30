@@ -57,13 +57,11 @@ from PySide6.QtWidgets import (
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _AdaptiveStack(QStackedWidget):
-    """QStackedWidget dont le sizeHint ne reflète que la page courante."""
+    """QStackedWidget avec minimum fixe — empêche la fenêtre de grandir quand une page a un grand contenu."""
     def minimumSizeHint(self):
-        cur = self.currentWidget()
-        return cur.minimumSizeHint() if cur else super().minimumSizeHint()
+        return QSize(400, 200)
     def sizeHint(self):
-        cur = self.currentWidget()
-        return cur.sizeHint() if cur else super().sizeHint()
+        return QSize(1320, 840)
 
 BG_DEEP     = '#0C1427'
 BG_SURFACE  = '#121E36'
@@ -2038,6 +2036,7 @@ class MainWindow(QMainWindow):
         w = min(1320, screen.width())
         h = min(840, screen.height())
         self.resize(w, h)
+        self.setMaximumHeight(h)
 
         central = QWidget()
         central.setObjectName('root')
