@@ -56,6 +56,15 @@ from PySide6.QtWidgets import (
 # PALETTE XPLORE
 # ══════════════════════════════════════════════════════════════════════════════
 
+class _AdaptiveStack(QStackedWidget):
+    """QStackedWidget dont le sizeHint ne reflète que la page courante."""
+    def minimumSizeHint(self):
+        cur = self.currentWidget()
+        return cur.minimumSizeHint() if cur else super().minimumSizeHint()
+    def sizeHint(self):
+        cur = self.currentWidget()
+        return cur.sizeHint() if cur else super().sizeHint()
+
 BG_DEEP     = '#0C1427'
 BG_SURFACE  = '#121E36'
 BG_ELEVATED = '#182440'
@@ -2038,7 +2047,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.stack = QStackedWidget()
+        self.stack = _AdaptiveStack()
         layout.addWidget(self.stack, 1)
         layout.addWidget(self._build_footer())
 
@@ -2136,7 +2145,7 @@ def main(args=None):
     spin_thread.start()
 
     window = MainWindow(bridge)
-    window.showMaximized()
+    window.show()
 
     exit_code = app.exec()
 
