@@ -2025,7 +2025,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.bridge = bridge
         self.setWindowTitle('XPlore — Rover Control')
-        self.resize(1320, 840)
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = min(1320, screen.width())
+        h = min(840, screen.height())
+        self.resize(w, h)
 
         central = QWidget()
         central.setObjectName('root')
