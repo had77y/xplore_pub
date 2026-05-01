@@ -940,10 +940,10 @@ class RacePage(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MapWidget(QWidget):
-    """Carte de navigation — grille 12×8 (10×6 intérieur + bordures) avec mini-cases 40×40cm."""
+    """Carte de navigation interactive — grille 12×8 avec mini-cases 40×40cm."""
 
-    ROWS = 12   # 10 internes + 2 bordures
-    COLS = 8    # 6 internes + 2 bordures
+    ROWS = 12
+    COLS = 8
 
     UNDISCOVERED = 0
     FREE         = 1
@@ -962,6 +962,8 @@ class MapWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
         self._fill = {
             self.UNDISCOVERED: QColor('#283C5A'),
             self.FREE:         QColor('#0D4A70'),
@@ -969,42 +971,178 @@ class MapWidget(QWidget):
             self.AMBUSH:       QColor('#111118'),
             self.CELL_BORDER:  QColor('#080810'),
         }
+
+        # Positions par défaut (coordonnées paddées, row, col)
+        self._target    = (1, 1)
+        self._start     = (self.ROWS - 2, self.COLS - 2)
+        self._robot_pos = self._start
+
+        self._reset_grid()
+        self._recalc_priorities()
+
+        # Mode de clic actif : 'target' | 'start' | None
+        self._click_mode = None
+        # État de navigation : 'ready' | 'running' | 'done'
+        self._nav_state  = 'ready'
+
+        # Rects buttons (mis à jour dans paintEvent, lus dans mousePressEvent)
+        self._btn_cible  = QRectF()
+        self._btn_depart = QRectF()
+        self._btn_start  = QRectF()
+        self._grid_x0 = 0.0
+        self._grid_y0 = 0.0
+        self._grid_cs = 1.0
+
+        # Navigation
+        self._path_stack    = []
+        self._ambush_streak = 0
+        self._nav_timer = QTimer(self)
+        self._nav_timer.timeout.connect(self._nav_step)
+
+        self.setMinimumSize(200, 380)
+        t = QTimer(self)
+        t.timeout.connect(self.update)
+        t.start(50)
+
+    # ── Grille / priorités ────────────────────────────────────────────
+
+    def _reset_grid(self):
         self._cells = [
             [self.CELL_BORDER if (r == 0 or r == self.ROWS - 1 or c == 0 or c == self.COLS - 1)
              else self.UNDISCOVERED
              for c in range(self.COLS)]
             for r in range(self.ROWS)
         ]
-        self._robot = (self.COLS - 2, self.ROWS - 2)  # bas-droite : col=6, row=10
-        self.setMinimumSize(200, 320)
-        t = QTimer(self)
-        t.timeout.connect(self.update)
-        t.start(50)
+
+    def _recalc_priorities(self):
+        tr, tc = self._target
+        self._priority = [
+            [max(abs(r - tr), abs(c - tc)) for c in range(self.COLS)]
+            for r in range(self.ROWS)
+        ]
+
+    # ── Navigation simulée ────────────────────────────────────────────
+
+    def _start_navigation(self):
+        self._reset_grid()
+        self._robot_pos = self._start
+        self._path_stack = [self._start]
+        sr, sc = self._start
+        self._cells[sr][sc] = self.FREE
+        self._ambush_streak = 0
+        self._nav_state = 'running'
+        self._nav_timer.start(500)
+        self.update()
+
+    def _stop_navigation(self):
+        self._nav_timer.stop()
+        self._nav_state = 'ready'
+        self._reset_grid()
+        self._robot_pos = self._start
+        self.update()
+
+    def _nav_step(self):
+        cr, cc = self._robot_pos
+        if (cr, cc) == self._target:
+            self._nav_state = 'done'
+            self._nav_timer.stop()
+            self.update()
+            return
+
+        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+        valid = [
+            (cr + dr, cc + dc) for dr, dc in dirs
+            if 0 <= cr+dr < self.ROWS and 0 <= cc+dc < self.COLS
+            and self._cells[cr+dr][cc+dc] not in (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
+        ]
+
+        if not valid:
+            self._cells[cr][cc] = self.AMBUSH
+            self._ambush_streak += 1
+            if self._path_stack:
+                self._robot_pos = self._path_stack.pop()
+        else:
+            best = min(valid, key=lambda rc: self._priority[rc[0]][rc[1]])
+            self._cells[best[0]][best[1]] = self.FREE
+            self._path_stack.append((cr, cc))
+            self._robot_pos = best
+            self._ambush_streak = 0
+
+        self.update()
+
+    # ── Interface publique ────────────────────────────────────────────
 
     def update_grid(self, cells: list):
-        """Reçoit un tableau 12×8 d'états (int) et redessine."""
         self._cells = cells
         self.update()
 
     def update_position(self, col: int, row: int):
-        self._robot = (col, row)
+        self._robot_pos = (row, col)
         self.update()
+
+    # ── Événements souris ─────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        px = event.position().x()
+        py = event.position().y()
+
+        if self._btn_start.contains(px, py):
+            if self._nav_state == 'running':
+                self._stop_navigation()
+            else:
+                self._start_navigation()
+            return
+
+        if self._btn_cible.contains(px, py):
+            self._click_mode = 'target' if self._click_mode != 'target' else None
+            self.update()
+            return
+
+        if self._btn_depart.contains(px, py):
+            self._click_mode = 'start' if self._click_mode != 'start' else None
+            self.update()
+            return
+
+        if self._nav_state != 'running' and self._click_mode is not None:
+            cs = self._grid_cs
+            col = int((px - self._grid_x0) / cs)
+            row = int((py - self._grid_y0) / cs)
+            if 1 <= row <= self.ROWS - 2 and 1 <= col <= self.COLS - 2:
+                if self._click_mode == 'target':
+                    self._target = (row, col)
+                else:
+                    self._start = (row, col)
+                    self._robot_pos = (row, col)
+                self._click_mode = None
+                self._recalc_priorities()
+                self._reset_grid()
+                self._nav_state = 'ready'
+                self.update()
+
+    # ── Rendu ─────────────────────────────────────────────────────────
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        LEGEND_H = 90
-        LABEL_H  = 28
+        LEGEND_H = 58
+        LABEL_H  = 26
+        BTNS_H   = 24
+        START_H  = 30
+        GAP      = 5
         margin   = 12
 
         aw = self.width()  - 2 * margin
-        ah = self.height() - LABEL_H - LEGEND_H - margin
+        ah = self.height() - LABEL_H - BTNS_H - START_H - LEGEND_H - 3 * GAP - margin
         cs = min(aw / self.COLS, ah / self.ROWS)
         gw = cs * self.COLS
         gh = cs * self.ROWS
         x0 = margin + (aw - gw) / 2
-        y0 = LABEL_H + (ah - gh) / 2
+        y0 = LABEL_H + BTNS_H + GAP + (ah - gh) / 2
+
+        self._grid_x0 = x0
+        self._grid_y0 = y0
+        self._grid_cs = cs
 
         # Titre
         p.setPen(QColor(TEXT_MUTED))
@@ -1012,9 +1150,20 @@ class MapWidget(QWidget):
         f.setWeight(QFont.Weight.Bold)
         f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
         p.setFont(f)
-        p.drawText(margin, 18, 'NAVIGATION MAP')
+        p.drawText(margin, LABEL_H - 4, 'NAVIGATION MAP')
 
-        # Remplissage cellules + X sur les bordures
+        # Boutons mode (ligne sous le titre)
+        btn_w = 62
+        btn_h = 20
+        by    = LABEL_H + 2
+        self._btn_cible  = QRectF(self.width() - margin - 2 * btn_w - 5, by, btn_w, btn_h)
+        self._btn_depart = QRectF(self.width() - margin - btn_w, by, btn_w, btn_h)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._draw_mode_btn(p, self._btn_cible,  'CIBLE',  self._click_mode == 'target', QColor(ACCENT_2))
+        self._draw_mode_btn(p, self._btn_depart, 'DÉPART', self._click_mode == 'start',  QColor(ACCENT))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        # Cellules
         p.setPen(Qt.PenStyle.NoPen)
         for r in range(self.ROWS):
             for c in range(self.COLS):
@@ -1036,7 +1185,7 @@ class MapWidget(QWidget):
         for c in range(self.COLS + 1):
             p.drawLine(QPointF(x0 + c * cs, y0), QPointF(x0 + c * cs, y0 + gh))
 
-        # Lignes mini-cases (plus claires, plus fines — intérieur uniquement)
+        # Lignes mini-cases
         mini_col = QColor(BORDER)
         mini_col.setAlpha(90)
         p.setPen(QPen(mini_col, 0.4))
@@ -1050,25 +1199,64 @@ class MapWidget(QWidget):
 
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # Marqueur cible T — haut-gauche intérieur (row=1, col=1)
-        self._draw_marker(p, x0, y0, cs, 1, 1, 'T', QColor(ACCENT_2))
+        # Marqueurs T et S
+        tr, tc = self._target
+        sr, sc = self._start
+        self._draw_marker(p, x0, y0, cs, tc, tr, 'T', QColor(ACCENT_2))
+        self._draw_marker(p, x0, y0, cs, sc, sr, 'S', QColor(ACCENT))
 
-        # Marqueur départ S — bas-droite intérieur (row=10, col=6)
-        self._draw_marker(p, x0, y0, cs, 6, 10, 'S', QColor(ACCENT))
-
-        # Marqueur rover
-        rcol, rrow = self._robot
-        cx = x0 + rcol * cs + cs / 2
-        cy = y0 + rrow * cs + cs / 2
+        # Rover
+        rr, rc = self._robot_pos
+        cx = x0 + rc * cs + cs / 2
+        cy = y0 + rr * cs + cs / 2
         r_rad = max(cs * 0.28, 3.0)
         p.setBrush(QBrush(QColor(PRIMARY)))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPointF(cx, cy), r_rad, r_rad)
 
+        # Bouton START / STOP
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        start_y = y0 + gh + GAP
+        self._btn_start = QRectF(x0, start_y, gw, START_H - 2)
+        self._draw_start_btn(p, self._btn_start)
+
         # Légende
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        self._draw_legend(p, margin, int(y0 + gh) + 10, int(self.width() - 2 * margin))
+        legend_y = int(start_y) + START_H + GAP - 4
+        self._draw_legend(p, margin, legend_y, int(self.width() - 2 * margin))
         p.end()
+
+    def _draw_mode_btn(self, p: QPainter, rect: QRectF, label: str, active: bool, color: QColor):
+        bg = QColor(color)
+        bg.setAlpha(80 if active else 25)
+        p.setBrush(QBrush(bg))
+        p.setPen(QPen(color, 1.0))
+        p.drawRoundedRect(rect, 3, 3)
+        p.setPen(color if active else QColor(TEXT_MUTED))
+        f = QFont('Inter', 7)
+        f.setWeight(QFont.Weight.Bold)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1)
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_start_btn(self, p: QPainter, rect: QRectF):
+        if self._nav_state == 'running':
+            label, color = '■  STOP',  QColor(PRIMARY)
+        elif self._nav_state == 'done':
+            label, color = '↺  RESET', QColor(ACCENT)
+        else:
+            label, color = '▶  START', QColor(ACCENT_2)
+        bg = QColor(color)
+        bg.setAlpha(35)
+        p.setBrush(QBrush(bg))
+        p.setPen(QPen(color, 1.2))
+        p.drawRoundedRect(rect, 4, 4)
+        p.setPen(color)
+        f = QFont('Inter', 9)
+        f.setWeight(QFont.Weight.Bold)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_marker(self, p: QPainter, x0, y0, cs, col, row, label, color):
         cx = x0 + col * cs + cs / 2
