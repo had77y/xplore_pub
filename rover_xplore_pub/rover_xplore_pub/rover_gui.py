@@ -951,14 +951,6 @@ class MapWidget(QWidget):
     AMBUSH       = 3
     CELL_BORDER  = 4
 
-    _FILL = {
-        0: QColor('#283C5A'),  # UNDISCOVERED — gris bleuté
-        1: QColor('#0D4A70'),  # FREE — teal sombre
-        2: QColor('#9B1C1C'),  # OBSTACLE — rouge
-        3: QColor('#111118'),  # AMBUSH — noir
-        4: QColor('#080810'),  # BORDER — noir profond
-    }
-
     _LEGEND_ITEMS = [
         (0, 'NON DÉCOUVERT'),
         (1, 'LIBRE'),
@@ -970,6 +962,13 @@ class MapWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+        self._fill = {
+            self.UNDISCOVERED: QColor('#283C5A'),
+            self.FREE:         QColor('#0D4A70'),
+            self.OBSTACLE:     QColor('#9B1C1C'),
+            self.AMBUSH:       QColor('#111118'),
+            self.CELL_BORDER:  QColor('#080810'),
+        }
         self._cells = [
             [self.CELL_BORDER if (r == 0 or r == self.ROWS - 1 or c == 0 or c == self.COLS - 1)
              else self.UNDISCOVERED
@@ -1016,16 +1015,19 @@ class MapWidget(QWidget):
         p.drawText(margin, 18, 'NAVIGATION MAP')
 
         # Remplissage cellules + X sur les bordures
+        p.setPen(Qt.PenStyle.NoPen)
         for r in range(self.ROWS):
             for c in range(self.COLS):
                 state = self._cells[r][c]
                 rx = x0 + c * cs
                 ry = y0 + r * cs
-                p.fillRect(QRectF(rx, ry, cs, cs), self._FILL[state])
+                p.setBrush(QBrush(self._fill[state]))
+                p.drawRect(QRectF(rx, ry, cs, cs))
                 if state == self.CELL_BORDER and cs >= 6:
                     p.setPen(QPen(QColor('#2A2A3C'), 0.8))
                     p.drawLine(QPointF(rx + 2, ry + 2), QPointF(rx + cs - 2, ry + cs - 2))
                     p.drawLine(QPointF(rx + cs - 2, ry + 2), QPointF(rx + 2, ry + cs - 2))
+                    p.setPen(Qt.PenStyle.NoPen)
 
         # Lignes grandes cases
         p.setPen(QPen(QColor(BORDER), 1.0))
@@ -1081,25 +1083,26 @@ class MapWidget(QWidget):
                    Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_legend(self, p: QPainter, x: int, y: int, w: int):
-        BOX   = 10
-        GAP   = 5
+        BOX   = 12
+        GAP   = 6
         COL_W = w // 3
-        f = QFont('Inter', 7)
-        f.setWeight(QFont.Weight.Bold)
-        p.setFont(f)
+        p.setFont(QFont('Inter', 8))
         for i, (state, label) in enumerate(self._LEGEND_ITEMS):
             col_i = i % 3
             row_i = i // 3
             ix = x + col_i * COL_W
-            iy = y + row_i * 18
-            p.fillRect(QRectF(ix, iy, BOX, BOX), self._FILL[state])
-            p.setPen(QPen(QColor(BORDER), 0.5))
+            iy = y + row_i * 20
+            p.setBrush(QBrush(self._fill[state]))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRect(QRectF(ix, iy, BOX, BOX))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(BORDER_HOVER), 1.0))
             p.drawRect(QRectF(ix, iy, BOX, BOX))
             if state == self.CELL_BORDER:
-                p.setPen(QPen(QColor('#2A2A3C'), 0.6))
-                p.drawLine(QPointF(ix + 1, iy + 1), QPointF(ix + BOX - 1, iy + BOX - 1))
-                p.drawLine(QPointF(ix + BOX - 1, iy + 1), QPointF(ix + 1, iy + BOX - 1))
-            p.setPen(QColor(TEXT_MUTED))
+                p.setPen(QPen(QColor('#3A3A50'), 0.8))
+                p.drawLine(QPointF(ix + 2, iy + 2), QPointF(ix + BOX - 2, iy + BOX - 2))
+                p.drawLine(QPointF(ix + BOX - 2, iy + 2), QPointF(ix + 2, iy + BOX - 2))
+            p.setPen(QColor(TEXT_DIM))
             p.drawText(ix + BOX + GAP, iy + BOX - 1, label)
 
 
