@@ -666,7 +666,7 @@ class KeyIndicator(QLabel):
     def __init__(self, key: str):
         super().__init__(key)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(46, 46)
+        self.setFixedSize(38, 38)
         self.setActive(False)
 
     def setActive(self, active: bool):
@@ -1719,8 +1719,9 @@ class ArmPage(QWidget):
     def _build_arm_controls(self) -> QGridLayout:
         """Grille 3 axes × 2 touches + indicateur de direction."""
         g = QGridLayout()
-        g.setSpacing(8)
+        g.setSpacing(6)
         g.setContentsMargins(0, 0, 0, 0)
+        g.setColumnMinimumWidth(0, 92)
         g.setColumnStretch(3, 1)
 
         self.arm_indicators = {}
@@ -1729,12 +1730,12 @@ class ArmPage(QWidget):
         axes = [
             ('UP/DOWN',    Qt.Key.Key_O,    'O', Qt.Key.Key_K,    'K', 'arm_z',    '↑', '↓'),
             ('CLOSE/OPEN', Qt.Key.Key_J,    'J', Qt.Key.Key_L,    'L', 'arm_pince','◁', '▷'),
-            ('FLIP/UNFLIP',Qt.Key.Key_P,    'P', Qt.Key.Key_I,    'I', 'arm_y',    '↺', '↻'),
+            ('FLIP/UNFLIP',Qt.Key.Key_I,    'I', Qt.Key.Key_P,    'P', 'arm_y',    '↺', '↻'),
             ('BENNE',      Qt.Key.Key_Up,   '↑', Qt.Key.Key_Down, '↓', 'bin_dir', '↑', '↓'),
         ]
         for row_i, (axis_name, k_pos, l_pos, k_neg, l_neg, attr, sym_p, sym_n) in enumerate(axes):
             lbl = QLabel(axis_name)
-            lbl.setFixedWidth(76)
+            lbl.setFixedWidth(90)
             lbl.setStyleSheet(
                 f'color: {TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 2px;'
             )
