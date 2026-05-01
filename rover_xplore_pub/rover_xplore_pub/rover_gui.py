@@ -1654,6 +1654,7 @@ class ArmPage(QWidget):
         lay.addWidget(make_section_label('Vitesse'))
         speed_row = QHBoxLayout()
         speed_row.setSpacing(8)
+        speed_row.addStretch(1)
         self.speed_indicators = {}
         for key, (val, label) in ARM_SPEED_LEVELS.items():
             ind = KeyIndicator(label)
@@ -1685,6 +1686,7 @@ class ArmPage(QWidget):
             self.move_indicators[qkey] = ind
             grid.addWidget(ind, r, c)
         grid_holder = QHBoxLayout()
+        grid_holder.addStretch(1)
         grid_holder.addLayout(grid)
         grid_holder.addStretch(1)
         lay.addLayout(grid_holder)
