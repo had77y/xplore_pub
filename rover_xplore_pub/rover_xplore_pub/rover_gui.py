@@ -666,21 +666,21 @@ class KeyIndicator(QLabel):
     def __init__(self, key: str):
         super().__init__(key)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(60, 60)
+        self.setFixedSize(46, 46)
         self.setActive(False)
 
     def setActive(self, active: bool):
         if active:
             style = (
                 f'background-color: {PRIMARY}; color: {TEXT};'
-                f'border: 1px solid {PRIMARY}; border-radius: 12px;'
-                f'font-size: 17px; font-weight: 800; letter-spacing: 1px;'
+                f'border: 1px solid {PRIMARY}; border-radius: 9px;'
+                f'font-size: 14px; font-weight: 800; letter-spacing: 1px;'
             )
         else:
             style = (
                 f'background-color: {BG_ELEVATED}; color: {TEXT_DIM};'
-                f'border: 1px solid {BORDER}; border-radius: 12px;'
-                f'font-size: 17px; font-weight: 700; letter-spacing: 1px;'
+                f'border: 1px solid {BORDER}; border-radius: 9px;'
+                f'font-size: 14px; font-weight: 700; letter-spacing: 1px;'
             )
         self.setStyleSheet(style)
 
@@ -1700,29 +1700,6 @@ class ArmPage(QWidget):
         # Bouton VIDAGE
         lay.addWidget(self._build_dump_button())
 
-        lay.addWidget(self._make_sep())
-
-        # Raccourcis
-        lay.addWidget(make_section_label('Raccourcis'))
-        for key_text, desc in [
-            ('ESPACE', 'Stop tout'),
-            ('6 / 7 / 8 / 9 / 0', 'Vitesse'),
-            ('M', 'Retour menu'),
-        ]:
-            row = QHBoxLayout()
-            row.setSpacing(12)
-            k = QLabel(key_text)
-            k.setStyleSheet(
-                f'color: {TEXT}; font-size: 11px; font-weight: 700;'
-                f'letter-spacing: 2px; min-width: 90px;'
-            )
-            d = QLabel(desc)
-            d.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 12px;')
-            row.addWidget(k)
-            row.addWidget(d)
-            row.addStretch(1)
-            lay.addLayout(row)
-
         lay.addStretch(1)
 
         back = GlowButton('← TÉLÉOPÉRATION', glow_color=(0, 174, 239), border_radius=10)
@@ -1750,14 +1727,14 @@ class ArmPage(QWidget):
         self._axis_labels: dict[str, QLabel] = {}
 
         axes = [
-            ('AXE Z',  Qt.Key.Key_O,    'O', Qt.Key.Key_K,    'K', 'arm_z',    '↑', '↓'),
-            ('AXE Y',  Qt.Key.Key_P,    'P', Qt.Key.Key_I,    'I', 'arm_y',    '↺', '↻'),
-            ('PINCES', Qt.Key.Key_J,    'J', Qt.Key.Key_L,    'L', 'arm_pince','◁', '▷'),
-            ('BENNE',  Qt.Key.Key_Up,   '↑', Qt.Key.Key_Down, '↓', 'bin_dir', '↑', '↓'),
+            ('UP/DOWN',    Qt.Key.Key_O,    'O', Qt.Key.Key_K,    'K', 'arm_z',    '↑', '↓'),
+            ('CLOSE/OPEN', Qt.Key.Key_J,    'J', Qt.Key.Key_L,    'L', 'arm_pince','◁', '▷'),
+            ('FLIP/UNFLIP',Qt.Key.Key_P,    'P', Qt.Key.Key_I,    'I', 'arm_y',    '↺', '↻'),
+            ('BENNE',      Qt.Key.Key_Up,   '↑', Qt.Key.Key_Down, '↓', 'bin_dir', '↑', '↓'),
         ]
         for row_i, (axis_name, k_pos, l_pos, k_neg, l_neg, attr, sym_p, sym_n) in enumerate(axes):
             lbl = QLabel(axis_name)
-            lbl.setFixedWidth(52)
+            lbl.setFixedWidth(76)
             lbl.setStyleSheet(
                 f'color: {TEXT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 2px;'
             )
