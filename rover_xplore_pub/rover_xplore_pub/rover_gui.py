@@ -737,6 +737,12 @@ class RacePage(QWidget):
         self.cmd_timer.timeout.connect(self._send_cmd)
         self.cmd_timer.start(100)
 
+    def _make_sep(self) -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f'background: {BORDER}; border: none; max-height: 1px;')
+        return sep
+
     def _build_left_panel(self) -> QWidget:
         card = GlowCard(phase_offset=0.0)
         card.setFixedWidth(380)
@@ -764,7 +770,7 @@ class RacePage(QWidget):
         header.addStretch(1)
         layout.addLayout(header)
 
-        layout.addSpacing(4)
+        layout.addWidget(self._make_sep())
         layout.addWidget(make_section_label('Vitesse'))
 
         speed_row = QHBoxLayout()
@@ -784,7 +790,7 @@ class RacePage(QWidget):
         )
         layout.addWidget(self.speed_label)
 
-        layout.addSpacing(16)
+        layout.addWidget(self._make_sep())
         layout.addWidget(make_section_label('Mouvement'))
 
         grid = QGridLayout()
@@ -807,7 +813,7 @@ class RacePage(QWidget):
         grid_holder.addStretch(1)
         layout.addLayout(grid_holder)
 
-        layout.addSpacing(16)
+        layout.addWidget(self._make_sep())
         layout.addWidget(make_section_label('Raccourcis'))
         for key_text, desc in [('ESPACE', 'Stop moteurs'), ('8 / 9 / 0', 'Vitesse'), ('M', 'Retour menu')]:
             row = QHBoxLayout()
@@ -1686,7 +1692,6 @@ class ArmPage(QWidget):
             self.move_indicators[qkey] = ind
             grid.addWidget(ind, r, c)
         grid_holder = QHBoxLayout()
-        grid_holder.addStretch(1)
         grid_holder.addLayout(grid)
         grid_holder.addStretch(1)
         lay.addLayout(grid_holder)
