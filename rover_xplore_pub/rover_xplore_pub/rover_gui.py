@@ -940,42 +940,74 @@ class RacePage(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MapWidget(QWidget):
-    """Carte de navigation — grille mise à jour en temps réel (placeholder)."""
+    """Carte de navigation — grille 12×8 (10×6 intérieur + bordures) avec mini-cases 40×40cm."""
 
-    COLS = 20
-    ROWS = 14
+    ROWS = 12   # 10 internes + 2 bordures
+    COLS = 8    # 6 internes + 2 bordures
+
+    UNDISCOVERED = 0
+    FREE         = 1
+    OBSTACLE     = 2
+    AMBUSH       = 3
+    CELL_BORDER  = 4
+
+    _FILL = {
+        0: QColor('#283C5A'),  # UNDISCOVERED — gris bleuté
+        1: QColor('#0D4A70'),  # FREE — teal sombre
+        2: QColor('#9B1C1C'),  # OBSTACLE — rouge
+        3: QColor('#111118'),  # AMBUSH — noir
+        4: QColor('#080810'),  # BORDER — noir profond
+    }
+
+    _LEGEND_ITEMS = [
+        (0, 'NON DÉCOUVERT'),
+        (1, 'LIBRE'),
+        (2, 'OBSTACLE'),
+        (3, 'EMBUSCADE'),
+        (4, 'BORDURE'),
+    ]
 
     def __init__(self):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
-        self._robot = (10, 7)
-        self._visited: set[tuple[int, int]] = {(10, 7)}
-        self.setMinimumSize(200, 160)
-        scan_timer = QTimer(self)
-        scan_timer.timeout.connect(self.update)
-        scan_timer.start(50)
+        self._cells = [
+            [self.CELL_BORDER if (r == 0 or r == self.ROWS - 1 or c == 0 or c == self.COLS - 1)
+             else self.UNDISCOVERED
+             for c in range(self.COLS)]
+            for r in range(self.ROWS)
+        ]
+        self._robot = (self.COLS - 2, self.ROWS - 2)  # bas-droite : col=6, row=10
+        self.setMinimumSize(200, 320)
+        t = QTimer(self)
+        t.timeout.connect(self.update)
+        t.start(50)
+
+    def update_grid(self, cells: list):
+        """Reçoit un tableau 12×8 d'états (int) et redessine."""
+        self._cells = cells
+        self.update()
 
     def update_position(self, col: int, row: int):
         self._robot = (col, row)
-        self._visited.add((col, row))
         self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        margin = 16
-        label_h = 28
-        aw = self.width()  - 2 * margin
-        ah = self.height() - label_h - margin
+        LEGEND_H = 90
+        LABEL_H  = 28
+        margin   = 12
 
+        aw = self.width()  - 2 * margin
+        ah = self.height() - LABEL_H - LEGEND_H - margin
         cs = min(aw / self.COLS, ah / self.ROWS)
         gw = cs * self.COLS
         gh = cs * self.ROWS
         x0 = margin + (aw - gw) / 2
-        y0 = label_h + (ah - gh) / 2
+        y0 = LABEL_H + (ah - gh) / 2
 
-        # Section label
+        # Titre
         p.setPen(QColor(TEXT_MUTED))
         f = QFont('Inter', 8)
         f.setWeight(QFont.Weight.Bold)
@@ -983,46 +1015,92 @@ class MapWidget(QWidget):
         p.setFont(f)
         p.drawText(margin, 18, 'NAVIGATION MAP')
 
-        # Cellules
+        # Remplissage cellules + X sur les bordures
         for r in range(self.ROWS):
             for c in range(self.COLS):
-                rect = QRectF(x0 + c * cs + 0.5, y0 + r * cs + 0.5, cs - 1, cs - 1)
-                if (c, r) in self._visited:
-                    p.fillRect(rect, QColor(0, 174, 239, 50))   # ACCENT teinté
-                else:
-                    p.fillRect(rect, QColor(BG_ELEVATED))
+                state = self._cells[r][c]
+                rx = x0 + c * cs
+                ry = y0 + r * cs
+                p.fillRect(QRectF(rx, ry, cs, cs), self._FILL[state])
+                if state == self.CELL_BORDER and cs >= 6:
+                    p.setPen(QPen(QColor('#2A2A3C'), 0.8))
+                    p.drawLine(QPointF(rx + 2, ry + 2), QPointF(rx + cs - 2, ry + cs - 2))
+                    p.drawLine(QPointF(rx + cs - 2, ry + 2), QPointF(rx + 2, ry + cs - 2))
 
-        # Lignes de grille
-        p.setPen(QPen(QColor(BORDER), 0.5))
+        # Lignes grandes cases
+        p.setPen(QPen(QColor(BORDER), 1.0))
         for r in range(self.ROWS + 1):
-            y = y0 + r * cs
-            p.drawLine(QPointF(x0, y), QPointF(x0 + gw, y))
+            p.drawLine(QPointF(x0, y0 + r * cs), QPointF(x0 + gw, y0 + r * cs))
         for c in range(self.COLS + 1):
-            x = x0 + c * cs
-            p.drawLine(QPointF(x, y0), QPointF(x, y0 + gh))
+            p.drawLine(QPointF(x0 + c * cs, y0), QPointF(x0 + c * cs, y0 + gh))
 
-        # Ligne de scan — balayage horizontal lent (sonar)
-        scan_t = (time.time() % 6.0) / 6.0  # cycle 6 s
-        scan_y = y0 + scan_t * gh
-        scan_alpha = int(55 * math.sin(scan_t * math.pi))
-        if scan_alpha > 0:
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-            pen = QPen(QColor(0, 174, 239, scan_alpha))
-            pen.setWidthF(1.5)
-            p.setPen(pen)
-            p.drawLine(QPointF(x0, scan_y), QPointF(x0 + gw, scan_y))
+        # Lignes mini-cases (plus claires, plus fines — intérieur uniquement)
+        mini_col = QColor(BORDER)
+        mini_col.setAlpha(90)
+        p.setPen(QPen(mini_col, 0.4))
+        for r in range(1, self.ROWS - 1):
+            for c in range(1, self.COLS - 1):
+                rx = x0 + c * cs
+                ry = y0 + r * cs
+                hcs = cs / 2
+                p.drawLine(QPointF(rx, ry + hcs), QPointF(rx + cs, ry + hcs))
+                p.drawLine(QPointF(rx + hcs, ry), QPointF(rx + hcs, ry + cs))
+
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Marqueur cible T — haut-gauche intérieur (row=1, col=1)
+        self._draw_marker(p, x0, y0, cs, 1, 1, 'T', QColor(ACCENT_2))
+
+        # Marqueur départ S — bas-droite intérieur (row=10, col=6)
+        self._draw_marker(p, x0, y0, cs, 6, 10, 'S', QColor(ACCENT))
 
         # Marqueur rover
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rx, ry = self._robot
-        cx = x0 + rx * cs + cs / 2
-        cy = y0 + ry * cs + cs / 2
-        radius = max(cs * 0.38, 3.0)
+        rcol, rrow = self._robot
+        cx = x0 + rcol * cs + cs / 2
+        cy = y0 + rrow * cs + cs / 2
+        r_rad = max(cs * 0.28, 3.0)
         p.setBrush(QBrush(QColor(PRIMARY)))
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QPointF(cx, cy), radius, radius)
+        p.drawEllipse(QPointF(cx, cy), r_rad, r_rad)
 
+        # Légende
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self._draw_legend(p, margin, int(y0 + gh) + 10, int(self.width() - 2 * margin))
         p.end()
+
+    def _draw_marker(self, p: QPainter, x0, y0, cs, col, row, label, color):
+        cx = x0 + col * cs + cs / 2
+        cy = y0 + row * cs + cs / 2
+        hs = cs * 0.28
+        p.setPen(QPen(color, 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRectF(cx - hs, cy - hs, hs * 2, hs * 2))
+        p.setPen(color)
+        p.setFont(QFont('Inter', max(int(cs * 0.25), 5)))
+        p.drawText(QRectF(cx - hs, cy - hs, hs * 2, hs * 2),
+                   Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_legend(self, p: QPainter, x: int, y: int, w: int):
+        BOX   = 10
+        GAP   = 5
+        COL_W = w // 3
+        f = QFont('Inter', 7)
+        f.setWeight(QFont.Weight.Bold)
+        p.setFont(f)
+        for i, (state, label) in enumerate(self._LEGEND_ITEMS):
+            col_i = i % 3
+            row_i = i // 3
+            ix = x + col_i * COL_W
+            iy = y + row_i * 18
+            p.fillRect(QRectF(ix, iy, BOX, BOX), self._FILL[state])
+            p.setPen(QPen(QColor(BORDER), 0.5))
+            p.drawRect(QRectF(ix, iy, BOX, BOX))
+            if state == self.CELL_BORDER:
+                p.setPen(QPen(QColor('#2A2A3C'), 0.6))
+                p.drawLine(QPointF(ix + 1, iy + 1), QPointF(ix + BOX - 1, iy + BOX - 1))
+                p.drawLine(QPointF(ix + BOX - 1, iy + 1), QPointF(ix + 1, iy + BOX - 1))
+            p.setPen(QColor(TEXT_MUTED))
+            p.drawText(ix + BOX + GAP, iy + BOX - 1, label)
 
 
 class _SensorCell(QFrame):
