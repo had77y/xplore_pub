@@ -997,6 +997,7 @@ class MapWidget(QWidget):
 
         # Navigation
         self._path_stack    = []
+        self._transit_path  = []
         self._ambush_streak = 0
         self._nav_timer = QTimer(self)
         self._nav_timer.timeout.connect(self._nav_step)
@@ -1031,6 +1032,7 @@ class MapWidget(QWidget):
         self._reset_grid()
         self._robot_pos = self._start
         self._path_stack = [self._start]
+        self._transit_path = []
         sr, sc = self._start
         self._cells[sr][sc] = self.FREE
         self._ambush_streak = 0
@@ -1041,9 +1043,55 @@ class MapWidget(QWidget):
     def _stop_navigation(self):
         self._nav_timer.stop()
         self._nav_state = 'ready'
+        self._transit_path = []
         self._reset_grid()
         self._robot_pos = self._start
         self.update()
+
+    def _bfs_to_best_undiscovered(self, sr, sc):
+        """BFS à travers les cases FREE depuis (sr,sc).
+        Retourne le chemin [(sr,sc), ..., best_undiscovered] ou [] si aucune atteignable."""
+        from collections import deque
+        _blocked = (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
+        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+
+        parent = {(sr, sc): None}
+        queue = deque([(sr, sc)])
+        best_priority = float('inf')
+        best_end = None
+
+        while queue:
+            r, c = queue.popleft()
+            for dr, dc in dirs:
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < self.ROWS and 0 <= nc < self.COLS):
+                    continue
+                cell = self._cells[nr][nc]
+                if cell in _blocked:
+                    continue
+                if abs(dr) == 1 and abs(dc) == 1:
+                    if self._cells[r][nc] in _blocked or self._cells[nr][c] in _blocked:
+                        continue
+                if (nr, nc) in parent:
+                    continue
+                parent[(nr, nc)] = (r, c)
+                if cell == self.UNDISCOVERED:
+                    p = self._priority[nr][nc]
+                    if p < best_priority:
+                        best_priority = p
+                        best_end = (nr, nc)
+                else:  # FREE — on peut traverser
+                    queue.append((nr, nc))
+
+        if best_end is None:
+            return []
+        path = []
+        cur = best_end
+        while cur is not None:
+            path.append(cur)
+            cur = parent[cur]
+        path.reverse()
+        return path
 
     def _nav_step(self):
         cr, cc = self._robot_pos
@@ -1053,31 +1101,38 @@ class MapWidget(QWidget):
             self.update()
             return
 
-        _blocked = (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
-        candidates = []
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
-            nr, nc = cr + dr, cc + dc
-            if not (0 <= nr < self.ROWS and 0 <= nc < self.COLS):
-                continue
-            if self._cells[nr][nc] != self.UNDISCOVERED:
-                continue
-            # Pour une diagonale, les deux coins doivent être libres
-            if abs(dr) == 1 and abs(dc) == 1:
-                if self._cells[cr][nc] in _blocked or self._cells[nr][cc] in _blocked:
-                    continue
-            candidates.append((nr, nc))
+        # Transit en cours : suivre le chemin stocké
+        if self._transit_path:
+            nr, nc = self._transit_path.pop(0)
+            if self._cells[nr][nc] == self.UNDISCOVERED:
+                self._cells[nr][nc] = self.FREE
+                self._ambush_streak = 0
+            self._robot_pos = (nr, nc)
+            self.update()
+            return
 
-        if not candidates:
+        # BFS pour trouver la meilleure UNDISCOVERED atteignable (directe ou via FREE)
+        path = self._bfs_to_best_undiscovered(cr, cc)
+
+        if not path:
+            # Aucune case non découverte atteignable → cul-de-sac total
             self._cells[cr][cc] = self.AMBUSH
             self._ambush_streak += 1
             if self._path_stack:
                 self._robot_pos = self._path_stack.pop()
-        else:
-            best = min(candidates, key=lambda rc: self._priority[rc[0]][rc[1]])
-            self._cells[best[0]][best[1]] = self.FREE
+        elif len(path) == 2:
+            # Voisin direct UNDISCOVERED → move classique
+            nr, nc = path[1]
+            self._cells[nr][nc] = self.FREE
             self._path_stack.append((cr, cc))
-            self._robot_pos = best
+            self._robot_pos = (nr, nc)
             self._ambush_streak = 0
+        else:
+            # Meilleure case accessible via transit FREE → stocker le chemin
+            self._path_stack.append((cr, cc))
+            self._transit_path = path[1:]
+            nr, nc = self._transit_path.pop(0)
+            self._robot_pos = (nr, nc)
 
         self.update()
 
