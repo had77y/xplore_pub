@@ -1053,20 +1053,27 @@ class MapWidget(QWidget):
             self.update()
             return
 
-        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
-        valid = [
-            (cr + dr, cc + dc) for dr, dc in dirs
-            if 0 <= cr+dr < self.ROWS and 0 <= cc+dc < self.COLS
-            and self._cells[cr+dr][cc+dc] not in (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
-        ]
+        _blocked = (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
+        candidates = []
+        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
+            nr, nc = cr + dr, cc + dc
+            if not (0 <= nr < self.ROWS and 0 <= nc < self.COLS):
+                continue
+            if self._cells[nr][nc] != self.UNDISCOVERED:
+                continue
+            # Pour une diagonale, les deux coins doivent être libres
+            if abs(dr) == 1 and abs(dc) == 1:
+                if self._cells[cr][nc] in _blocked or self._cells[nr][cc] in _blocked:
+                    continue
+            candidates.append((nr, nc))
 
-        if not valid:
+        if not candidates:
             self._cells[cr][cc] = self.AMBUSH
             self._ambush_streak += 1
             if self._path_stack:
                 self._robot_pos = self._path_stack.pop()
         else:
-            best = min(valid, key=lambda rc: self._priority[rc[0]][rc[1]])
+            best = min(candidates, key=lambda rc: self._priority[rc[0]][rc[1]])
             self._cells[best[0]][best[1]] = self.FREE
             self._path_stack.append((cr, cc))
             self._robot_pos = best
