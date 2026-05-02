@@ -977,18 +977,20 @@ class MapWidget(QWidget):
         self._start     = (self.ROWS - 2, self.COLS - 2)
         self._robot_pos = self._start
 
+        self._manual_obstacles = set()
         self._reset_grid()
         self._recalc_priorities()
 
-        # Mode de clic actif : 'target' | 'start' | None
+        # Mode de clic actif : 'target' | 'start' | 'obstacle' | None
         self._click_mode = None
         # État de navigation : 'ready' | 'running' | 'done'
         self._nav_state  = 'ready'
 
         # Rects buttons (mis à jour dans paintEvent, lus dans mousePressEvent)
-        self._btn_cible  = QRectF()
-        self._btn_depart = QRectF()
-        self._btn_start  = QRectF()
+        self._btn_cible    = QRectF()
+        self._btn_depart   = QRectF()
+        self._btn_obstacle = QRectF()
+        self._btn_start    = QRectF()
         self._grid_x0 = 0.0
         self._grid_y0 = 0.0
         self._grid_cs = 1.0
@@ -1013,6 +1015,8 @@ class MapWidget(QWidget):
              for c in range(self.COLS)]
             for r in range(self.ROWS)
         ]
+        for r, c in getattr(self, '_manual_obstacles', set()):
+            self._cells[r][c] = self.OBSTACLE
 
     def _recalc_priorities(self):
         tr, tc = self._target
@@ -1103,20 +1107,38 @@ class MapWidget(QWidget):
             self.update()
             return
 
+        if self._btn_obstacle.contains(px, py):
+            self._click_mode = 'obstacle' if self._click_mode != 'obstacle' else None
+            self.update()
+            return
+
         if self._nav_state != 'running' and self._click_mode is not None:
             cs = self._grid_cs
             col = int((px - self._grid_x0) / cs)
             row = int((py - self._grid_y0) / cs)
             if 1 <= row <= self.ROWS - 2 and 1 <= col <= self.COLS - 2:
-                if self._click_mode == 'target':
+                if self._click_mode == 'obstacle':
+                    if (row, col) not in (self._target, self._start):
+                        if (row, col) in self._manual_obstacles:
+                            self._manual_obstacles.discard((row, col))
+                            self._cells[row][col] = self.UNDISCOVERED
+                        else:
+                            self._manual_obstacles.add((row, col))
+                            self._cells[row][col] = self.OBSTACLE
+                    # mode sticky : ne pas réinitialiser _click_mode
+                elif self._click_mode == 'target':
                     self._target = (row, col)
+                    self._click_mode = None
+                    self._recalc_priorities()
+                    self._reset_grid()
+                    self._nav_state = 'ready'
                 else:
                     self._start = (row, col)
                     self._robot_pos = (row, col)
-                self._click_mode = None
-                self._recalc_priorities()
-                self._reset_grid()
-                self._nav_state = 'ready'
+                    self._click_mode = None
+                    self._recalc_priorities()
+                    self._reset_grid()
+                    self._nav_state = 'ready'
                 self.update()
 
     # ── Rendu ─────────────────────────────────────────────────────────
@@ -1156,11 +1178,13 @@ class MapWidget(QWidget):
         btn_w = 62
         btn_h = 20
         by    = LABEL_H + 2
-        self._btn_cible  = QRectF(self.width() - margin - 2 * btn_w - 5, by, btn_w, btn_h)
-        self._btn_depart = QRectF(self.width() - margin - btn_w, by, btn_w, btn_h)
+        self._btn_obstacle = QRectF(self.width() - margin - 3 * btn_w - 10, by, btn_w, btn_h)
+        self._btn_cible    = QRectF(self.width() - margin - 2 * btn_w - 5,  by, btn_w, btn_h)
+        self._btn_depart   = QRectF(self.width() - margin - btn_w,           by, btn_w, btn_h)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self._draw_mode_btn(p, self._btn_cible,  'CIBLE',  self._click_mode == 'target', QColor(ACCENT_2))
-        self._draw_mode_btn(p, self._btn_depart, 'DÉPART', self._click_mode == 'start',  QColor(ACCENT))
+        self._draw_mode_btn(p, self._btn_obstacle, 'OBSTACLE', self._click_mode == 'obstacle', QColor('#9B1C1C'))
+        self._draw_mode_btn(p, self._btn_cible,    'CIBLE',    self._click_mode == 'target',   QColor(ACCENT_2))
+        self._draw_mode_btn(p, self._btn_depart,   'DÉPART',   self._click_mode == 'start',    QColor(ACCENT))
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         # Cellules
