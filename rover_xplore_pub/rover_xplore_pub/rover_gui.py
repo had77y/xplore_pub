@@ -279,25 +279,48 @@ QLabel#aruco_log {{
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROS2 BRIDGE
+# ROS2 BRIDGE — Pont entre ROS2 (thread C) et Qt (thread principal)
+#
+# PROBLÈME : ROS2 et Qt tournent dans des threads différents.
+#   - Qt exige que TOUS les accès aux widgets se fassent dans le thread principal (GUI).
+#   - Les callbacks ROS2 (sur réception d'un message réseau) s'exécutent dans un thread séparé.
+#   - Modifier un widget depuis un thread non-GUI → crash ou comportement indéfini.
+#
+# SOLUTION : les Signaux Qt (Signal/emit/connect)
+#   1. Le callback ROS2 appelle bridge.signal.emit(données)  ← thread ROS (sécurisé)
+#   2. Qt met l'appel en file d'attente dans le thread GUI
+#   3. Le slot connecté s'exécute dans le thread GUI → peut modifier les widgets
+#
+# SIGNAUX DISPONIBLES :
+#   frame_ready(QImage)                       → reçu par les widgets caméra
+#   aruco_update(found, id, cx, cy, area)     → reçu par AutonomousPage._on_aruco()
+#   status_update(str)                        → reçu par AutonomousPage._on_status()
+#
+# ARCHITECTURE :
+#   RosBridge   = façade publique (utilisée par les pages Qt)
+#   _RosNode    = implémentation ROS2 interne (souscriptions, publications)
 # ══════════════════════════════════════════════════════════════════════════════
 
 VIDEO_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
+    reliability=ReliabilityPolicy.BEST_EFFORT,  # abandonne les vieux frames si réseau lent
     history=HistoryPolicy.KEEP_LAST,
-    depth=1,
+    depth=1,  # ne garde que le frame le plus récent en file
 )
 
 
 class RosBridge(QObject):
-    frame_ready   = Signal(QImage)
-    aruco_update  = Signal(bool, int, float, float, float)
-    status_update = Signal(str)
+    # Signaux Qt : déclarés comme attributs de classe (pas d'instance)
+    # Chaque Signal définit les types des données qu'il transporte
+    frame_ready   = Signal(QImage)                      # un nouveau frame caméra est prêt
+    aruco_update  = Signal(bool, int, float, float, float)  # (found, id, cx, cy, area)
+    status_update = Signal(str)                         # texte de statut depuis autonomous_node
 
     def __init__(self):
         super().__init__()
-        self._node = _RosNode(self)
+        self._node = _RosNode(self)  # crée le nœud ROS2 sous-jacent
 
+    # Méthodes de publication : délèguent à _RosNode
+    # Appelées depuis les pages Qt (thread GUI) → safe car publish() est thread-safe dans ROS2
     def publish_mode(self, mode: str):
         self._node.publish_mode(mode)
 
@@ -317,21 +340,32 @@ class RosBridge(QObject):
 
 
 class _RosNode(Node):
+    """
+    Nœud ROS2 interne — gère toutes les communications réseau.
+    Ne touche jamais aux widgets Qt directement (thread safety).
+    Utilise bridge.signal.emit() pour envoyer les données vers Qt.
+    """
     def __init__(self, bridge: RosBridge):
         super().__init__('rover_gui')
-        self._bridge = bridge
+        self._bridge = bridge  # référence vers RosBridge pour emit()
 
-        self.pub_mode = self.create_publisher(String, '/rover/mode', 10)
-        self.pub_cmd  = self.create_publisher(Twist,  '/rover/cmd_vel', 10)
+        # ── Publishers → vers le rover (RPi) via WiFi ──────────────────────────
+        self.pub_mode = self.create_publisher(String,            '/rover/mode',    10)
+        self.pub_cmd  = self.create_publisher(Twist,             '/rover/cmd_vel', 10)
         self.pub_arm  = self.create_publisher(Float32MultiArray, '/rover/arm_cmd', 10)
 
+        # ── Subscribers ← depuis le rover (RPi) via WiFi ──────────────────────
+        # /camera/image_compressed : flux JPEG depuis camera_node (RPi)
+        # QoS BEST_EFFORT + depth=1 = toujours le frame le plus récent, jamais de lag
         self.create_subscription(
             CompressedImage, '/camera/image_compressed',
             self._on_image, VIDEO_QOS,
         )
+        # /aruco_detected : résultat de détection ArUco depuis aruco_node (RPi)
         self.create_subscription(
             Float32MultiArray, '/aruco_detected', self._on_aruco, 10,
         )
+        # /rover_status : texte d'état depuis autonomous_node (RPi)
         self.create_subscription(
             String, '/rover_status', self._on_status, 10,
         )
@@ -341,10 +375,12 @@ class _RosNode(Node):
         #   /imu        sensor_msgs/Imu  accel(x,y,z) + gyro(x,y,z)  → IMUCard
 
     def publish_mode(self, mode: str):
+        """Publie le mode sur /rover/mode → reçu par tous les nodes RPi."""
         msg = String(); msg.data = mode
         self.pub_mode.publish(msg)
 
     def publish_cmd(self, linear: float, angular: float):
+        """Publie un Twist sur /rover/cmd_vel → reçu par motor_controller_node (RPi)."""
         msg = Twist()
         msg.linear.x  = float(linear)
         msg.angular.z = float(angular)
@@ -352,6 +388,10 @@ class _RosNode(Node):
 
     def publish_arm_cmd(self, z: float, y: float, pince: float,
                         speed: float, dump: bool = False, bin_dir: float = 0.0):
+        """
+        Publie une commande bras sur /rover/arm_cmd → reçu par arm_node (RPi, à créer).
+        Format : [z, y, pince, speed, dump(0/1), bin_dir]
+        """
         msg = Float32MultiArray()
         msg.data = [
             float(z), float(y), float(pince),
@@ -362,24 +402,44 @@ class _RosNode(Node):
         self.pub_arm.publish(msg)
 
     def _on_image(self, msg: CompressedImage):
-        buf = np.frombuffer(msg.data, dtype=np.uint8)
-        bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        """
+        Callback appelé dans le thread ROS2 à chaque frame reçu de camera_node (RPi).
+        Décode le JPEG (bytes ROS2 → numpy BGR → numpy RGB → QImage)
+        puis émet le signal frame_ready → Qt affiche dans le thread GUI.
+        BGR→RGB : OpenCV stocke en BGR, Qt attend du RGB.
+        .copy() : nécessaire car QImage partage le buffer numpy sinon (dangereux en multi-thread).
+        """
+        buf  = np.frombuffer(msg.data, dtype=np.uint8)
+        bgr  = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # décompresse le JPEG
         if bgr is None:
             return
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        rgb  = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w, _ = rgb.shape
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
-        self._bridge.frame_ready.emit(qimg)
+        self._bridge.frame_ready.emit(qimg)  # → thread GUI → CameraThumb / _CameraOverlay
 
     def _on_aruco(self, msg: Float32MultiArray):
+        """
+        Callback appelé dans le thread ROS2 à chaque message /aruco_detected.
+        Reçoit [found, id, cx, cy, area] depuis aruco_node (RPi).
+        Émet aruco_update → thread GUI → AutonomousPage._on_aruco()
+        """
         if len(msg.data) < 5:
             return
         self._bridge.aruco_update.emit(
-            msg.data[0] > 0.5,
-            int(msg.data[1]), msg.data[2], msg.data[3], msg.data[4],
+            msg.data[0] > 0.5,       # found : True/False
+            int(msg.data[1]),         # id
+            msg.data[2],              # cx (pixels)
+            msg.data[3],              # cy (pixels)
+            msg.data[4],              # area (pixels²)
         )
 
     def _on_status(self, msg: String):
+        """
+        Callback appelé dans le thread ROS2 à chaque message /rover_status.
+        Reçoit une string depuis autonomous_node (RPi) ex: "state=SEARCH pos=(1.2,0.5)..."
+        Émet status_update → thread GUI → AutonomousPage._on_status()
+        """
         self._bridge.status_update.emit(msg.data)
 
 
@@ -940,7 +1000,49 @@ class RacePage(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MapWidget(QWidget):
-    """Carte de navigation interactive — grille 12×8 avec mini-cases 40×40cm."""
+    """
+    Carte de navigation interactive — grille 12×8 représentant le terrain de compétition.
+
+    RÔLE DOUBLE :
+      1. Simulation locale (côté PC) : visualise l'algorithme BFS de navigation
+         avant de l'implémenter sur le rover réel.
+      2. Visualisation temps réel (futur) : quand autonomous_node (RPi) publiera
+         /rover/grid_state et /rover/grid_pos, MapWidget les affichera via
+         update_grid() et update_position().
+
+    GRILLE :
+      12 lignes × 8 colonnes = 96 cases
+      Bordure de 1 case tout autour (CELL_BORDER) = zone interdite
+      Zone navigable intérieure : 10×6 cases = 80cm × 80cm chacune
+      → terrain réel 8m × 5m (8/0.8=10, 5/0.8=6... puis arrondi avec bordures)
+
+    ÉTATS DES CASES :
+      UNDISCOVERED (0) = bleu foncé — le rover ne sait pas si c'est libre ou non
+      FREE         (1) = bleu      — le rover est passé par là, c'est libre
+      OBSTACLE     (2) = rouge     — un obstacle a été détecté ici
+      AMBUSH       (3) = noir      — cul-de-sac vécu : le rover y est allé et
+                                    toutes les voisines étaient bloquées → à éviter
+      CELL_BORDER  (4) = noir      — bordure de la grille (hors terrain)
+
+    ALGORITHME BFS (_bfs_to_best_undiscovered) :
+      À chaque tick de navigation (_nav_step), le rover cherche la meilleure case
+      UNDISCOVERED à explorer. "Meilleure" = distance Chebyshev minimale vers la cible.
+      Distance de Chebyshev = max(|dr|, |dc|) — permet les diagonales.
+      Le BFS traverse uniquement les cases FREE (déjà visitées) pour atteindre
+      une case UNDISCOVERED adjacente.
+
+    PRIORITÉ (_priority) :
+      Calculée par _recalc_priorities() : pour chaque case (r,c),
+      priority[r][c] = max(|r - target_r|, |c - target_c|)
+      → 0 au centre de la cible, augmente en s'éloignant
+      → BFS choisit toujours la case UNDISCOVERED avec la priorité la plus faible
+      → le rover explore en spirale vers la cible
+
+    GESTION DES CUL-DE-SAC (AMBUSH) :
+      Si BFS ne trouve aucune case UNDISCOVERED atteignable depuis la position courante
+      → la case courante est marquée AMBUSH
+      → on remonte d'un cran dans path_stack (backtracking)
+    """
 
     ROWS = 12
     COLS = 8
@@ -1029,109 +1131,181 @@ class MapWidget(QWidget):
     # ── Navigation simulée ────────────────────────────────────────────
 
     def _start_navigation(self):
+        """
+        Lance la simulation de navigation : remet la grille à zéro et démarre le timer.
+        Appelée quand l'utilisateur clique le bouton DÉPART dans MapWidget.
+        Le timer _nav_timer appelle _nav_step() toutes les 500ms (un pas de navigation).
+        """
         self._reset_grid()
-        self._robot_pos = self._start
-        self._path_stack = [self._start]
-        self._transit_path = []
+        self._robot_pos  = self._start         # robot part de la position de départ
+        self._path_stack = [self._start]       # pile de backtracking (historique des positions)
+        self._transit_path = []                # chemin de transit via cases FREE (vide au départ)
         sr, sc = self._start
-        self._cells[sr][sc] = self.FREE
-        self._ambush_streak = 0
-        self._nav_state = 'running'
-        self._nav_timer.start(500)
+        self._cells[sr][sc] = self.FREE        # marque la case de départ comme visitée
+        self._ambush_streak  = 0
+        self._nav_state      = 'running'
+        self._nav_timer.start(500)             # un pas toutes les 500ms
         self.update()
 
     def _stop_navigation(self):
+        """Arrête la simulation et remet la grille à l'état initial."""
         self._nav_timer.stop()
-        self._nav_state = 'ready'
+        self._nav_state    = 'ready'
         self._transit_path = []
         self._reset_grid()
-        self._robot_pos = self._start
+        self._robot_pos    = self._start
         self.update()
 
     def _bfs_to_best_undiscovered(self, sr, sc):
-        """BFS à travers les cases FREE depuis (sr,sc).
-        Retourne le chemin [(sr,sc), ..., best_undiscovered] ou [] si aucune atteignable."""
+        """
+        BFS (Breadth-First Search) depuis la position (sr, sc).
+
+        OBJECTIF : trouver la case UNDISCOVERED la plus proche de la CIBLE
+                   qui soit atteignable en traversant uniquement des cases FREE.
+
+        POURQUOI BFS et pas A* ou Dijkstra ?
+          BFS garantit le chemin le plus court en nombre de cases (toutes les cases
+          ont le même "coût" de traversée). Ici on ne cherche pas le chemin le plus
+          court vers la cible finale, mais vers la prochaine case à explorer.
+          BFS est plus simple et suffisamment rapide sur une grille 12×8.
+
+        POURQUOI "via FREE" seulement ?
+          On ne peut pas traverser une case UNDISCOVERED pour en atteindre une autre
+          (on ne sait pas si elle est libre). On doit d'abord la visiter.
+          Exception : si une UNDISCOVERED est directement voisine → on peut l'atteindre.
+
+        DIAGONALES :
+          Les 8 directions sont autorisées (y compris diagonales).
+          Condition supplémentaire pour les diagonales : les deux cases adjacentes
+          (dans les directions cardinales) ne doivent pas être bloquées.
+          Exemple : pour aller en (r-1, c-1), les cases (r-1, c) ET (r, c-1)
+          ne doivent pas être OBSTACLE/AMBUSH/BORDER (évite de "passer dans les coins").
+
+        RETOURNE :
+          Liste de cases [(sr,sc), ..., (best_r, best_c)] = chemin complet
+          ou [] si aucune case UNDISCOVERED n'est atteignable (cul-de-sac total).
+
+        PRIORITÉ :
+          Parmi toutes les cases UNDISCOVERED atteignables, on choisit celle avec
+          la priorité (distance Chebyshev vers la cible) la plus faible.
+          → le rover explore toujours en direction de la cible en premier.
+        """
         from collections import deque
         _blocked = (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
+        # 8 directions : N, S, O, E + 4 diagonales
         dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
 
-        parent = {(sr, sc): None}
-        queue = deque([(sr, sc)])
-        best_priority = float('inf')
-        best_end = None
+        parent   = {(sr, sc): None}  # pour reconstruire le chemin final
+        queue    = deque([(sr, sc)])
+        best_priority = float('inf')  # on cherche la priorité MINIMALE (plus proche cible)
+        best_end = None               # case UNDISCOVERED la plus intéressante trouvée
 
         while queue:
             r, c = queue.popleft()
             for dr, dc in dirs:
                 nr, nc = r + dr, c + dc
+                # Vérification des limites de la grille
                 if not (0 <= nr < self.ROWS and 0 <= nc < self.COLS):
                     continue
                 cell = self._cells[nr][nc]
+                # Cases bloquées → on ne peut pas passer
                 if cell in _blocked:
                     continue
+                # Vérification diagonale : pas de passage dans les coins
                 if abs(dr) == 1 and abs(dc) == 1:
                     if self._cells[r][nc] in _blocked or self._cells[nr][c] in _blocked:
                         continue
+                # Déjà visité par ce BFS → ignorer
                 if (nr, nc) in parent:
                     continue
-                parent[(nr, nc)] = (r, c)
+                parent[(nr, nc)] = (r, c)  # mémorise d'où on vient (pour reconstruire)
+
                 if cell == self.UNDISCOVERED:
+                    # Case candidate ! Vérifier si c'est la meilleure (priorité min)
                     p = self._priority[nr][nc]
                     if p < best_priority:
                         best_priority = p
-                        best_end = (nr, nc)
-                else:  # FREE — on peut traverser
+                        best_end      = (nr, nc)
+                    # On N'ajoute PAS à la queue : on ne traverse pas les UNDISCOVERED
+                else:
+                    # Case FREE → on peut traverser → continuer le BFS à partir d'ici
                     queue.append((nr, nc))
 
         if best_end is None:
-            return []
+            return []  # cul-de-sac total : aucune case UNDISCOVERED atteignable
+
+        # Reconstruction du chemin en remontant le dict parent
         path = []
-        cur = best_end
+        cur  = best_end
         while cur is not None:
             path.append(cur)
             cur = parent[cur]
-        path.reverse()
-        return path
+        path.reverse()  # on avait construit à l'envers (de la fin vers le début)
+        return path      # → [(sr,sc), case1, case2, ..., best_end]
 
     def _nav_step(self):
+        """
+        Un pas de navigation — appelé toutes les 500ms par le timer.
+        Implémente l'algorithme de navigation BFS avec backtracking.
+
+        TROIS CAS POSSIBLES à chaque tick :
+
+        1. La cible est atteinte → fin de simulation
+        2. Transit en cours (self._transit_path non vide) → avancer d'une case sur le chemin
+           Le transit se produit quand la meilleure UNDISCOVERED n'est pas directement voisine
+           mais accessible via un couloir de cases FREE déjà visitées.
+        3. Pas de transit → lancer un BFS pour trouver le prochain mouvement :
+           a. Aucune case UNDISCOVERED atteignable → cul-de-sac → AMBUSH + backtrack
+           b. Case UNDISCOVERED directement voisine → déplacement classique
+           c. Case UNDISCOVERED accessible via transit → stocker le chemin intermédiaire
+        """
         cr, cc = self._robot_pos
+
+        # Cas 1 : mission accomplie
         if (cr, cc) == self._target:
             self._nav_state = 'done'
             self._nav_timer.stop()
             self.update()
             return
 
-        # Transit en cours : suivre le chemin stocké
+        # Cas 2 : transit en cours → suivre le chemin stocké case par case
         if self._transit_path:
-            nr, nc = self._transit_path.pop(0)
+            nr, nc = self._transit_path.pop(0)  # prochaine case du chemin
             if self._cells[nr][nc] == self.UNDISCOVERED:
+                # On vient de "découvrir" cette case en transit → marquer FREE
                 self._cells[nr][nc] = self.FREE
-                self._ambush_streak = 0
+                self._ambush_streak  = 0
             self._robot_pos = (nr, nc)
             self.update()
             return
 
-        # BFS pour trouver la meilleure UNDISCOVERED atteignable (directe ou via FREE)
+        # Cas 3 : calculer le prochain mouvement via BFS
         path = self._bfs_to_best_undiscovered(cr, cc)
 
         if not path:
-            # Aucune case non découverte atteignable → cul-de-sac total
-            self._cells[cr][cc] = self.AMBUSH
+            # CAS 3a : cul-de-sac — aucune case UNDISCOVERED atteignable depuis ici
+            # → marquer la case courante AMBUSH (à éviter à l'avenir)
+            # → backtrack : revenir à la case précédente dans path_stack
+            self._cells[cr][cc]  = self.AMBUSH
             self._ambush_streak += 1
             if self._path_stack:
-                self._robot_pos = self._path_stack.pop()
+                self._robot_pos = self._path_stack.pop()  # recule d'un pas
+
         elif len(path) == 2:
-            # Voisin direct UNDISCOVERED → move classique
+            # CAS 3b : la case UNDISCOVERED est directement voisine (chemin = [courant, voisin])
             nr, nc = path[1]
-            self._cells[nr][nc] = self.FREE
-            self._path_stack.append((cr, cc))
-            self._robot_pos = (nr, nc)
-            self._ambush_streak = 0
+            self._cells[nr][nc] = self.FREE          # découverte de la case
+            self._path_stack.append((cr, cc))        # mémorise la position courante pour backtrack
+            self._robot_pos      = (nr, nc)
+            self._ambush_streak  = 0
+
         else:
-            # Meilleure case accessible via transit FREE → stocker le chemin
+            # CAS 3c : la case UNDISCOVERED est atteinte via un transit de cases FREE
+            # path = [courant, free1, free2, ..., undiscovered]
+            # Stocker le chemin complet et avancer d'un pas
             self._path_stack.append((cr, cc))
-            self._transit_path = path[1:]
-            nr, nc = self._transit_path.pop(0)
+            self._transit_path = path[1:]            # tout le chemin sauf la case courante
+            nr, nc = self._transit_path.pop(0)       # premier pas du transit
             self._robot_pos = (nr, nc)
 
         self.update()
