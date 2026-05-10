@@ -942,6 +942,12 @@ class RacePage(QWidget):
 
     def _send_cmd(self):
         now = time.time()
+        for key in self.active_keys:
+            lin, ang = MOVEMENT_KEYS[key]
+            if lin != 0.0:
+                self.last_linear_t = now
+            if ang != 0.0:
+                self.last_angular_t = now
         if now - self.last_linear_t > AXIS_TIMEOUT:
             self.linear = 0.0
         if now - self.last_angular_t > AXIS_TIMEOUT:
@@ -2372,22 +2378,19 @@ class ArmPage(QWidget):
             self.linear = 0.0
         if now - self.last_angular_t > AXIS_TIMEOUT:
             self.angular = 0.0
-        if now - self.last_z_t > ARM_AXIS_TIMEOUT:
-            if self.arm_z != 0.0:
-                self.arm_z = 0.0
-                self._refresh_arm_keys()
-        if now - self.last_y_t > ARM_AXIS_TIMEOUT:
-            if self.arm_y != 0.0:
-                self.arm_y = 0.0
-                self._refresh_arm_keys()
-        if now - self.last_pince_t > ARM_AXIS_TIMEOUT:
-            if self.arm_pince != 0.0:
-                self.arm_pince = 0.0
-                self._refresh_arm_keys()
-        if now - self.last_bin_t > ARM_AXIS_TIMEOUT:
-            if self.bin_dir != 0.0:
-                self.bin_dir = 0.0
-                self._refresh_arm_keys()
+
+        arm_changed = False
+        for attr, ts_attr in (
+            ('arm_z',    'last_z_t'),
+            ('arm_y',    'last_y_t'),
+            ('arm_pince','last_pince_t'),
+            ('bin_dir',  'last_bin_t'),
+        ):
+            if now - getattr(self, ts_attr) > ARM_AXIS_TIMEOUT and getattr(self, attr) != 0.0:
+                setattr(self, attr, 0.0)
+                arm_changed = True
+        if arm_changed:
+            self._refresh_arm_keys()
 
         self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
         self.bridge.publish_arm_cmd(
