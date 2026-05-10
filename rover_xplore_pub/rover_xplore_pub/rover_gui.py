@@ -941,17 +941,13 @@ class RacePage(QWidget):
         self.fps_label.setText(f'{len(self._frame_times)} FPS')
 
     def _send_cmd(self):
-        now = time.time()
-        for key in self.active_keys:
-            lin, ang = MOVEMENT_KEYS[key]
-            if lin != 0.0:
-                self.last_linear_t = now
-            if ang != 0.0:
-                self.last_angular_t = now
-        if now - self.last_linear_t > AXIS_TIMEOUT:
-            self.linear = 0.0
-        if now - self.last_angular_t > AXIS_TIMEOUT:
-            self.angular = 0.0
+        if self.active_keys:
+            linear = sum(MOVEMENT_KEYS[k][0] for k in self.active_keys)
+            angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_keys)
+            self.linear  = max(-1.0, min(1.0, linear))
+            self.angular = max(-1.0, min(1.0, angular))
+        else:
+            self.linear = self.angular = 0.0
         self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -2373,24 +2369,28 @@ class ArmPage(QWidget):
         self.fps_label.setText(f'{len(self._frame_times)} FPS')
 
     def _send_cmds(self):
-        now = time.time()
-        if now - self.last_linear_t > AXIS_TIMEOUT:
-            self.linear = 0.0
-        if now - self.last_angular_t > AXIS_TIMEOUT:
-            self.angular = 0.0
+        if self.active_rover_keys:
+            linear = sum(MOVEMENT_KEYS[k][0] for k in self.active_rover_keys)
+            angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_rover_keys)
+            self.linear  = max(-1.0, min(1.0, linear))
+            self.angular = max(-1.0, min(1.0, angular))
+        else:
+            self.linear = self.angular = 0.0
 
-        arm_changed = False
-        for attr, ts_attr in (
-            ('arm_z',    'last_z_t'),
-            ('arm_y',    'last_y_t'),
-            ('arm_pince','last_pince_t'),
-            ('bin_dir',  'last_bin_t'),
-        ):
-            if now - getattr(self, ts_attr) > ARM_AXIS_TIMEOUT and getattr(self, attr) != 0.0:
-                setattr(self, attr, 0.0)
-                arm_changed = True
-        if arm_changed:
-            self._refresh_arm_keys()
+        if self.active_arm_keys:
+            for key in self.active_arm_keys:
+                z_dir, y_dir, pince_dir, bin_d = ARM_MOVE_KEYS[key]
+                if z_dir != 0.0:
+                    self.arm_z = z_dir
+                if y_dir != 0.0:
+                    self.arm_y = y_dir
+                if pince_dir != 0.0:
+                    self.arm_pince = pince_dir
+                if bin_d != 0.0:
+                    self.bin_dir = bin_d
+        else:
+            self.arm_z = self.arm_y = self.arm_pince = self.bin_dir = 0.0
+        self._refresh_arm_keys()
 
         self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
         self.bridge.publish_arm_cmd(
