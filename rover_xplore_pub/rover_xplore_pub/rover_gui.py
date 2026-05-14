@@ -769,6 +769,78 @@ MOVEMENT_KEYS = {
 }
 
 
+class RoverVisualWidget(QWidget):
+    """Vue top-down simplifiée du rover — 4 roues colorées avec vitesse."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._fl = self._fr = self._bl = self._br = 0.0
+        self.setFixedSize(170, 130)
+
+    def update_speeds(self, fl: float, fr: float, bl: float, br: float):
+        self._fl, self._fr, self._bl, self._br = fl, fr, bl, br
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        W, H = self.width(), self.height()
+        BODY_W, BODY_H = 50, 80
+        WHEEL_W, WHEEL_H = 14, 26
+        GAP = 6
+
+        bx = (W - BODY_W) // 2
+        by = (H - BODY_H) // 2
+
+        # Corps
+        p.setBrush(QBrush(QColor('#1A2540')))
+        p.setPen(QPen(QColor(BORDER), 1.5))
+        p.drawRoundedRect(bx, by, BODY_W, BODY_H, 6, 6)
+
+        # Flèche avant dans le corps
+        p.setPen(QPen(QColor(TEXT_MUTED), 1.5))
+        ax = bx + BODY_W // 2
+        ay = by + BODY_H // 2
+        p.drawLine(ax, ay + 12, ax, ay - 10)
+        p.drawLine(ax, ay - 10, ax - 6, ay - 2)
+        p.drawLine(ax, ay - 10, ax + 6, ay - 2)
+
+        # Roues et texte vitesse
+        wx_l = bx - GAP - WHEEL_W
+        wx_r = bx + BODY_W + GAP
+
+        font = p.font()
+        font.setPixelSize(10)
+        font.setBold(True)
+        p.setFont(font)
+
+        for speed, wx, wy, is_left in [
+            (self._fl, wx_l, by + 8,                True),   # FL
+            (self._fr, wx_r, by + 8,                False),  # FR
+            (self._bl, wx_l, by + BODY_H - 8 - WHEEL_H, True),   # BL
+            (self._br, wx_r, by + BODY_H - 8 - WHEEL_H, False),  # BR
+        ]:
+            col = (QColor(ACCENT_2) if speed > 0.02
+                   else QColor(PRIMARY) if speed < -0.02
+                   else QColor(BORDER))
+            p.setBrush(QBrush(col))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(wx, wy, WHEEL_W, WHEEL_H, 3, 3)
+
+            pct = int(round(abs(speed) * 100))
+            text = '0' if pct == 0 else (f'+{pct}' if speed > 0 else f'-{pct}')
+            p.setPen(QPen(QColor(TEXT_MUTED) if pct == 0 else col))
+            if is_left:
+                p.drawText(QRectF(0, wy, wx_l - 2, WHEEL_H),
+                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+            else:
+                p.drawText(QRectF(wx + WHEEL_W + 4, wy, W - wx - WHEEL_W - 4, WHEEL_H),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+        p.end()
+
+
 class RacePage(QWidget):
     def __init__(self, bridge: RosBridge, on_back):
         super().__init__()
@@ -783,6 +855,8 @@ class RacePage(QWidget):
         self.active_keys: set = set()
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self._rover_visual = RoverVisualWidget()
 
         root = QHBoxLayout(self)
         root.setContentsMargins(32, 28, 32, 28)
@@ -851,7 +925,7 @@ class RacePage(QWidget):
         layout.addWidget(self.speed_label)
 
         layout.addWidget(self._make_sep())
-        layout.addWidget(make_section_label('Mouvement'))
+        layout.addWidget(make_section_label('Mouvement rover'))
 
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -870,6 +944,8 @@ class RacePage(QWidget):
 
         grid_holder = QHBoxLayout()
         grid_holder.addLayout(grid)
+        grid_holder.addSpacing(12)
+        grid_holder.addWidget(self._rover_visual)
         grid_holder.addStretch(1)
         layout.addLayout(grid_holder)
 
@@ -948,7 +1024,12 @@ class RacePage(QWidget):
             self.angular = max(-1.0, min(1.0, angular))
         else:
             self.linear = self.angular = 0.0
-        self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
+        lin = self.linear * self.speed
+        ang = self.angular * self.speed
+        self.bridge.publish_cmd(lin, ang)
+        fl = bl = max(-1.0, min(1.0, lin - ang))
+        fr = br = max(-1.0, min(1.0, lin + ang))
+        self._rover_visual.update_speeds(fl, fr, bl, br)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.isAutoRepeat():
@@ -2156,6 +2237,8 @@ class ArmPage(QWidget):
         self.speed = 0.50   # défaut niveau 8
         self._dump_pending = False
 
+        self._rover_visual = RoverVisualWidget()
+
         root = QHBoxLayout(self)
         root.setContentsMargins(32, 28, 32, 28)
         root.setSpacing(28)
@@ -2232,6 +2315,8 @@ class ArmPage(QWidget):
             grid.addWidget(ind, r, c)
         grid_holder = QHBoxLayout()
         grid_holder.addLayout(grid)
+        grid_holder.addSpacing(12)
+        grid_holder.addWidget(self._rover_visual)
         grid_holder.addStretch(1)
         lay.addLayout(grid_holder)
 
@@ -2441,7 +2526,12 @@ class ArmPage(QWidget):
         if self._dump_pending:
             self._s4_angle = 100.0
 
-        self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
+        lin = self.linear * self.speed
+        ang = self.angular * self.speed
+        self.bridge.publish_cmd(lin, ang)
+        fl = bl = max(-1.0, min(1.0, lin - ang))
+        fr = br = max(-1.0, min(1.0, lin + ang))
+        self._rover_visual.update_speeds(fl, fr, bl, br)
         self.bridge.publish_arm_cmd(
             self.arm_z, self._s1_angle, self._s23_angle,
             self.speed,
