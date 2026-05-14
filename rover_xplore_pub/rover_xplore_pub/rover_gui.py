@@ -1027,8 +1027,8 @@ class RacePage(QWidget):
         lin = self.linear * self.speed
         ang = self.angular * self.speed
         self.bridge.publish_cmd(lin, ang)
-        fl = bl = max(-1.0, min(1.0, lin - ang))
-        fr = br = max(-1.0, min(1.0, lin + ang))
+        fl = bl = max(-1.0, min(1.0, lin - ang * 0.125))
+        fr = br = max(-1.0, min(1.0, lin + ang * 0.125))
         self._rover_visual.update_speeds(fl, fr, bl, br)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -2529,8 +2529,8 @@ class ArmPage(QWidget):
         lin = self.linear * self.speed
         ang = self.angular * self.speed
         self.bridge.publish_cmd(lin, ang)
-        fl = bl = max(-1.0, min(1.0, lin - ang))
-        fr = br = max(-1.0, min(1.0, lin + ang))
+        fl = bl = max(-1.0, min(1.0, lin - ang * 0.125))
+        fr = br = max(-1.0, min(1.0, lin + ang * 0.125))
         self._rover_visual.update_speeds(fl, fr, bl, br)
         self.bridge.publish_arm_cmd(
             self.arm_z, self._s1_angle, self._s23_angle,
