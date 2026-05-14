@@ -1018,10 +1018,8 @@ class RacePage(QWidget):
 
     def _send_cmd(self):
         if self.active_keys:
-            linear = sum(MOVEMENT_KEYS[k][0] for k in self.active_keys)
-            angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_keys)
-            self.linear  = max(-1.0, min(1.0, linear))
-            self.angular = max(-1.0, min(1.0, angular))
+            self.linear  = max(-1.0, min(1.0, sum(MOVEMENT_KEYS[k][0] for k in self.active_keys)))
+            self.angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_keys)
         else:
             self.linear = self.angular = 0.0
         lin = self.linear * self.speed
@@ -2495,10 +2493,8 @@ class ArmPage(QWidget):
 
     def _send_cmds(self):
         if self.active_rover_keys:
-            linear = sum(MOVEMENT_KEYS[k][0] for k in self.active_rover_keys)
-            angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_rover_keys)
-            self.linear  = max(-1.0, min(1.0, linear))
-            self.angular = max(-1.0, min(1.0, angular))
+            self.linear  = max(-1.0, min(1.0, sum(MOVEMENT_KEYS[k][0] for k in self.active_rover_keys)))
+            self.angular = sum(MOVEMENT_KEYS[k][1] for k in self.active_rover_keys)
         else:
             self.linear = self.angular = 0.0
 
