@@ -760,12 +760,12 @@ SPEED_LEVELS = {
 MOVEMENT_KEYS = {
     Qt.Key.Key_W: ( 1.0,  0.0),
     Qt.Key.Key_S: (-1.0,  0.0),
-    Qt.Key.Key_A: ( 0.0,  1.0),
-    Qt.Key.Key_D: ( 0.0, -1.0),
-    Qt.Key.Key_Q: ( 1.0,  1.0),
-    Qt.Key.Key_E: ( 1.0, -1.0),
-    Qt.Key.Key_Y: (-1.0,  1.0),
-    Qt.Key.Key_X: (-1.0, -1.0),
+    Qt.Key.Key_A: ( 0.0,  8.0),   # rotation gauche — angular×8 pour avoir ±100% PWM (entraxe 25cm)
+    Qt.Key.Key_D: ( 0.0, -8.0),   # rotation droite
+    Qt.Key.Key_Q: ( 1.0,  1.0),   # arc avant-gauche
+    Qt.Key.Key_E: ( 1.0, -1.0),   # arc avant-droite
+    Qt.Key.Key_Y: (-1.0, -1.0),   # arc arrière-gauche (angular négatif = roue droite plus rapide)
+    Qt.Key.Key_X: (-1.0,  1.0),   # arc arrière-droite
 }
 
 
