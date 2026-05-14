@@ -2263,7 +2263,7 @@ class ArmPage(QWidget):
         return sep
 
     def _build_arm_controls(self) -> QGridLayout:
-        """Grille 3 axes × 2 touches + indicateur de direction."""
+        """Grille 4 axes × 2 touches + angle + bouton reset (servos uniquement)."""
         g = QGridLayout()
         g.setSpacing(6)
         g.setContentsMargins(0, 0, 0, 0)
@@ -2272,6 +2272,13 @@ class ArmPage(QWidget):
 
         self.arm_indicators = {}
         self._axis_labels: dict[str, QLabel] = {}
+
+        # attr → angle accumulé correspondant (None = stepper, pas de reset)
+        _SERVO_ANGLE_ATTR = {
+            'arm_pince': '_s23_angle',
+            'arm_y':     '_s1_angle',
+            'bin_dir':   '_s4_angle',
+        }
 
         axes = [
             ('UP/DOWN',    Qt.Key.Key_O,    'O', Qt.Key.Key_K,    'K', 'arm_z',    '↑', '↓'),
@@ -2302,7 +2309,32 @@ class ArmPage(QWidget):
             self._axis_labels[attr] = status
             g.addWidget(status, row_i, 3)
 
+            if attr in _SERVO_ANGLE_ATTR:
+                angle_attr = _SERVO_ANGLE_ATTR[attr]
+                reset_btn = QPushButton('↺ 0')
+                reset_btn.setFixedSize(48, 28)
+                reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                reset_btn.setStyleSheet(
+                    f'QPushButton {{'
+                    f'  background-color: #1A1A1A; border: 1px solid {BORDER};'
+                    f'  border-radius: 8px; font-size: 10px; font-weight: 700;'
+                    f'  color: {TEXT_MUTED};'
+                    f'}}'
+                    f'QPushButton:hover {{'
+                    f'  border-color: {PRIMARY}; color: {PRIMARY};'
+                    f'}}'
+                    f'QPushButton:pressed {{'
+                    f'  background-color: {PRIMARY}; color: {BG_DEEP};'
+                    f'}}'
+                )
+                reset_btn.clicked.connect(lambda _, a=angle_attr: self._reset_servo_angle(a))
+                g.addWidget(reset_btn, row_i, 4)
+
         return g
+
+    def _reset_servo_angle(self, angle_attr: str):
+        setattr(self, angle_attr, 0.0)
+        self._update_arm_status()
 
     def _build_dump_button(self) -> QPushButton:
         self._dump_btn = QPushButton('⬇  POSITION DE VIDAGE')
