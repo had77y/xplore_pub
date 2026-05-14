@@ -2144,6 +2144,14 @@ class ArmPage(QWidget):
         self.last_bin_t = 0.0
         self.active_arm_keys: set = set()
 
+        # ── Angles accumulés des servos [-100..100] ──
+        # Le GUI accumule et envoie la valeur absolue directement à arm_node.
+        # SERVO_STEP = unités ajoutées par tick (100ms) à speed=1.0
+        self._SERVO_STEP = 3.0
+        self._s1_angle  = 0.0   # flip/unflip  (arm_y)
+        self._s23_angle = 0.0   # open/close   (arm_pince)
+        self._s4_angle  = 0.0   # benne        (bin_dir)
+
         # ── Vitesse partagée rover + bras ──
         self.speed = 0.50   # défaut niveau 8
         self._dump_pending = False
@@ -2384,20 +2392,29 @@ class ArmPage(QWidget):
                     self.arm_z = z_dir
                 if y_dir != 0.0:
                     self.arm_y = y_dir
+                    self._s1_angle = max(-100.0, min(100.0,
+                        self._s1_angle + y_dir * self.speed * self._SERVO_STEP))
                 if pince_dir != 0.0:
                     self.arm_pince = pince_dir
+                    self._s23_angle = max(-100.0, min(100.0,
+                        self._s23_angle + pince_dir * self.speed * self._SERVO_STEP))
                 if bin_d != 0.0:
                     self.bin_dir = bin_d
+                    self._s4_angle = max(-100.0, min(100.0,
+                        self._s4_angle + bin_d * self.speed * self._SERVO_STEP))
         else:
             self.arm_z = self.arm_y = self.arm_pince = self.bin_dir = 0.0
         self._refresh_arm_keys()
 
+        if self._dump_pending:
+            self._s4_angle = 100.0
+
         self.bridge.publish_cmd(self.linear * self.speed, self.angular * self.speed)
         self.bridge.publish_arm_cmd(
-            self.arm_z, self.arm_y, self.arm_pince,
+            self.arm_z, self._s1_angle, self._s23_angle,
             self.speed,
             dump=self._dump_pending,
-            bin_dir=self.bin_dir,
+            bin_dir=self._s4_angle,
         )
         if self._dump_pending:
             self._dump_pending = False
@@ -2428,6 +2445,7 @@ class ArmPage(QWidget):
                 self.last_linear_t = self.last_angular_t = 0.0
                 self.arm_z = self.arm_y = self.arm_pince = self.bin_dir = 0.0
                 self.last_z_t = self.last_y_t = self.last_pince_t = self.last_bin_t = 0.0
+                self._s1_angle = self._s23_angle = self._s4_angle = 0.0
                 self.active_rover_keys.clear()
                 self.active_arm_keys.clear()
                 self._refresh_rover_keys()
@@ -2508,29 +2526,37 @@ class ArmPage(QWidget):
         self._update_arm_status()
 
     def _update_arm_status(self):
-        pairs = [
-            ('arm_z',     self.arm_z,     '↑', '↓'),
-            ('arm_y',     self.arm_y,     '↺', '↻'),
-            ('arm_pince', self.arm_pince, '◁', '▷'),
-            ('bin_dir',   self.bin_dir,   '↑', '↓'),
+        # Stepper (arm_z) : affiche la direction (flèche)
+        lbl_z = self._axis_labels['arm_z']
+        if self.arm_z > 0.0:
+            lbl_z.setText('↑')
+            lbl_z.setStyleSheet(f'color: {ACCENT_2}; font-size: 20px; font-weight: 700; padding-left: 10px;')
+        elif self.arm_z < 0.0:
+            lbl_z.setText('↓')
+            lbl_z.setStyleSheet(f'color: {PRIMARY}; font-size: 20px; font-weight: 700; padding-left: 10px;')
+        else:
+            lbl_z.setText('—')
+            lbl_z.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 20px; font-weight: 700; padding-left: 10px;')
+
+        # Servos : affiche l'angle absolu accumulé [-100..100]
+        servo_pairs = [
+            ('arm_y',     self._s1_angle),
+            ('arm_pince', self._s23_angle),
+            ('bin_dir',   self._s4_angle),
         ]
-        for attr, val, sym_pos, sym_neg in pairs:
+        for attr, angle in servo_pairs:
             lbl = self._axis_labels[attr]
-            if val > 0.0:
-                lbl.setText(sym_pos)
-                lbl.setStyleSheet(
-                    f'color: {ACCENT_2}; font-size: 20px; font-weight: 700; padding-left: 10px;'
-                )
-            elif val < 0.0:
-                lbl.setText(sym_neg)
-                lbl.setStyleSheet(
-                    f'color: {PRIMARY}; font-size: 20px; font-weight: 700; padding-left: 10px;'
-                )
+            text = f'{angle:+.0f}'
+            if angle > 0.0:
+                color = ACCENT_2
+            elif angle < 0.0:
+                color = PRIMARY
             else:
-                lbl.setText('—')
-                lbl.setStyleSheet(
-                    f'color: {TEXT_MUTED}; font-size: 20px; font-weight: 700; padding-left: 10px;'
-                )
+                color = TEXT_MUTED
+            lbl.setText(text)
+            lbl.setStyleSheet(
+                f'color: {color}; font-size: 18px; font-weight: 700; padding-left: 10px;'
+            )
 
     def showEvent(self, event):
         super().showEvent(event)
