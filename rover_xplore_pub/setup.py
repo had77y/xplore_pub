@@ -28,6 +28,7 @@ setup(
             'mode_selector_node = rover_xplore_pub.mode_selector_node:main',
             'teleop_node = rover_xplore_pub.teleop_node:main',
             'controller_node = rover_xplore_pub.controller_node:main',
+            'diag_node = rover_xplore_pub.diag_node:main',
         ],
     },
 )
