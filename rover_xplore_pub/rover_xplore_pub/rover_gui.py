@@ -1058,8 +1058,6 @@ class RacePage(QWidget):
             self._refresh_keys()
 
     def keyReleaseEvent(self, event: QKeyEvent):
-        if event.isAutoRepeat():
-            return
         key = event.key()
         if key in MOVEMENT_KEYS:
             self.active_keys.discard(key)
@@ -2611,8 +2609,6 @@ class ArmPage(QWidget):
             self._refresh_rover_keys()
 
     def keyReleaseEvent(self, event: QKeyEvent):
-        if event.isAutoRepeat():
-            return
         key = event.key()
         if key in ARM_MOVE_KEYS:
             z_dir, y_dir, pince_dir, bin_d = ARM_MOVE_KEYS[key]
