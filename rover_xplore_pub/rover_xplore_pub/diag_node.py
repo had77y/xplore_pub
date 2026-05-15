@@ -21,7 +21,7 @@ class DiagNode(Node):
         self.create_subscription(Int32MultiArray,   '/wheel_encoders', self._cb_enc, 10)
         self.create_subscription(Float32MultiArray, '/ultrasonic',     self._cb_us,  10)
 
-        self.create_timer(0.5, self._print)
+        self.create_timer(0.1, self._print)
 
     def _cb_imu(self, msg: Imu):
         with self._lock:
