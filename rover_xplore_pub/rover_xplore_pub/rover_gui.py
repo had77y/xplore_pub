@@ -2183,8 +2183,8 @@ ARM_AXIS_TIMEOUT = 0.20
 ARM_MOVE_KEYS = {
     Qt.Key.Key_O:    ( 1.0,  0.0,  0.0,  0.0),   # Z monter
     Qt.Key.Key_K:    (-1.0,  0.0,  0.0,  0.0),   # Z descendre
-    Qt.Key.Key_P:    ( 0.0,  1.0,  0.0,  0.0),   # Y pivot +
-    Qt.Key.Key_I:    ( 0.0, -1.0,  0.0,  0.0),   # Y dépivot
+    Qt.Key.Key_I:    ( 0.0,  1.0,  0.0,  0.0),   # Y pivot +
+    Qt.Key.Key_P:    ( 0.0, -1.0,  0.0,  0.0),   # Y dépivot
     Qt.Key.Key_J:    ( 0.0,  0.0,  1.0,  0.0),   # Pince ouvrir
     Qt.Key.Key_L:    ( 0.0,  0.0, -1.0,  0.0),   # Pince fermer
     Qt.Key.Key_Up:   ( 0.0,  0.0,  0.0,  1.0),   # Benne monter
