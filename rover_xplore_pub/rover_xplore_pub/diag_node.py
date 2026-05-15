@@ -47,14 +47,14 @@ class DiagNode(Node):
         print('╠══════════════════════════════════════════════╣')
 
         if imu:
-            ax = int(imu.linear_acceleration.x)
-            ay = int(imu.linear_acceleration.y)
-            az = int(imu.linear_acceleration.z)
-            gx = int(imu.angular_velocity.x)
-            gy = int(imu.angular_velocity.y)
-            gz = int(imu.angular_velocity.z)
-            print(f'║  IMU  accel  ax={ax:6d}  ay={ay:6d}  az={az:6d}  ║')
-            print(f'║         gyro  gx={gx:6d}  gy={gy:6d}  gz={gz:6d}  ║')
+            ax = imu.linear_acceleration.x
+            ay = imu.linear_acceleration.y
+            az = imu.linear_acceleration.z
+            gx = imu.angular_velocity.x
+            gy = imu.angular_velocity.y
+            gz = imu.angular_velocity.z
+            print(f'║  IMU  accel  ax={ax:8.1f}  ay={ay:8.1f}  az={az:8.1f}  ║')
+            print(f'║         gyro  gx={gx:8.1f}  gy={gy:8.1f}  gz={gz:8.1f}  ║')
         else:
             print('║  IMU    (en attente...)                      ║')
             print('║                                              ║')
