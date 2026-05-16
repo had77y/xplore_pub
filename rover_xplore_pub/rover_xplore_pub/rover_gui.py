@@ -1107,6 +1107,13 @@ class RacePage(QWidget):
         for k, (val, _) in SPEED_LEVELS.items():
             self.speed_indicators[k].setActive(abs(val - self.speed) < 1e-3)
         self.setFocus()
+        self.cmd_timer.start(100)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.cmd_timer.stop()
+        self.active_keys.clear()
+        self.bridge.publish_cmd(0.0, 0.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2512,6 +2519,14 @@ class ArmPage(QWidget):
             val, _ = ARM_SPEED_LEVELS[k]
             ind.setActive(abs(val - self.speed) < 1e-3)
         self.setFocus()
+        self.cmd_timer.start(100)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.cmd_timer.stop()
+        self.active_rover_keys.clear()
+        self.active_arm_keys.clear()
+        self.bridge.publish_cmd(0.0, 0.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
