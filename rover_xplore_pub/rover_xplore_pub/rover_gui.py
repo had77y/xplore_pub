@@ -896,6 +896,7 @@ class RacePage(QWidget):
         root.addWidget(self._build_right_panel(), 1)
 
         bridge.frame_ready.connect(self._on_frame)
+        self._frame_pending = False
 
         self.cmd_timer = QTimer(self)
         self.cmd_timer.timeout.connect(self._send_cmd)
@@ -1033,18 +1034,20 @@ class RacePage(QWidget):
         return card
 
     def _on_frame(self, qimg: QImage):
-        if not self.isVisible():
+        if not self.isVisible() or self._frame_pending:
             return
+        self._frame_pending = True
         scaled = qimg.scaled(
             self.video.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self.video.setPixmap(QPixmap.fromImage(scaled))
         now = time.time()
         self._frame_times.append(now)
         self._frame_times = [t for t in self._frame_times if now - t < 1.0]
         self.fps_label.setText(f'{len(self._frame_times)} FPS')
+        self._frame_pending = False
 
     def _send_cmd(self):
         if self.active_keys:
@@ -2068,6 +2071,7 @@ class ArmPage(QWidget):
         root.addWidget(self._build_right_panel(), 1)
 
         bridge.frame_ready.connect(self._on_frame)
+        self._frame_pending = False
 
         self.cmd_timer = QTimer(self)
         self.cmd_timer.timeout.connect(self._send_cmds)
@@ -2302,18 +2306,20 @@ class ArmPage(QWidget):
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _on_frame(self, qimg: QImage):
-        if not self.isVisible():
+        if not self.isVisible() or self._frame_pending:
             return
+        self._frame_pending = True
         scaled = qimg.scaled(
             self.video.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self.video.setPixmap(QPixmap.fromImage(scaled))
         now = time.time()
         self._frame_times.append(now)
         self._frame_times = [t for t in self._frame_times if now - t < 1.0]
         self.fps_label.setText(f'{len(self._frame_times)} FPS')
+        self._frame_pending = False
 
     def _send_cmds(self):
         if self.active_rover_keys:
