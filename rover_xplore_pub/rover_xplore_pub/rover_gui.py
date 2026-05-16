@@ -33,7 +33,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import String, Float32MultiArray
+from std_msgs.msg import String, Float32MultiArray, Int32MultiArray
 from geometry_msgs.msg import Twist
 
 from PySide6.QtCore import (
@@ -311,9 +311,11 @@ VIDEO_QOS = QoSProfile(
 class RosBridge(QObject):
     # Signaux Qt : déclarés comme attributs de classe (pas d'instance)
     # Chaque Signal définit les types des données qu'il transporte
-    frame_ready   = Signal(QImage)                      # un nouveau frame caméra est prêt
-    aruco_update  = Signal(bool, int, float, float, float)  # (found, id, cx, cy, area)
-    status_update = Signal(str)                         # texte de statut depuis autonomous_node
+    frame_ready      = Signal(QImage)                       # un nouveau frame caméra est prêt
+    aruco_update     = Signal(bool, int, float, float, float)   # (found, id, cx, cy, area)
+    status_update    = Signal(str)                          # texte de statut depuis autonomous_node
+    grid_pos_update  = Signal(int, int)                     # (col, row) position rover sur grille
+    grid_state_update = Signal(list)                        # grille 96 valeurs row-major
 
     def __init__(self):
         super().__init__()
@@ -330,6 +332,9 @@ class RosBridge(QObject):
     def publish_arm_cmd(self, z: float, y: float, pince: float,
                         speed: float, dump: bool = False, bin_dir: float = 0.0):
         self._node.publish_arm_cmd(z, y, pince, speed, dump, bin_dir)
+
+    def publish_nav_goal(self, row: int, col: int):
+        self._node.publish_nav_goal(row, col)
 
     def destroy_node(self):
         self._node.destroy_node()
@@ -350,9 +355,10 @@ class _RosNode(Node):
         self._bridge = bridge  # référence vers RosBridge pour emit()
 
         # ── Publishers → vers le rover (RPi) via WiFi ──────────────────────────
-        self.pub_mode = self.create_publisher(String,            '/rover/mode',    10)
-        self.pub_cmd  = self.create_publisher(Twist,             '/rover/cmd_vel', 10)
-        self.pub_arm  = self.create_publisher(Float32MultiArray, '/rover/arm_cmd', 10)
+        self.pub_mode     = self.create_publisher(String,            '/rover/mode',     10)
+        self.pub_cmd      = self.create_publisher(Twist,             '/rover/cmd_vel',  10)
+        self.pub_arm      = self.create_publisher(Float32MultiArray, '/rover/arm_cmd',  10)
+        self.pub_nav_goal = self.create_publisher(Int32MultiArray,   '/rover/nav_goal', 10)
 
         # ── Subscribers ← depuis le rover (RPi) via WiFi ──────────────────────
         # /camera/image_compressed : flux JPEG depuis camera_node (RPi)
@@ -368,6 +374,14 @@ class _RosNode(Node):
         # /rover_status : texte d'état depuis autonomous_node (RPi)
         self.create_subscription(
             String, '/rover_status', self._on_status, 10,
+        )
+        # /rover/grid_pos : position grille [col, row] depuis odometry_node (RPi)
+        self.create_subscription(
+            Int32MultiArray, '/rover/grid_pos', self._on_grid_pos, 10,
+        )
+        # /rover/grid_state : grille 96 valeurs depuis autonomous_node (RPi)
+        self.create_subscription(
+            Int32MultiArray, '/rover/grid_state', self._on_grid_state, 10,
         )
 
         # Placeholders à brancher quand les nodes seront prêts :
@@ -434,6 +448,12 @@ class _RosNode(Node):
             msg.data[4],              # area (pixels²)
         )
 
+    def publish_nav_goal(self, row: int, col: int):
+        """Publie la case cible sur /rover/nav_goal → reçu par autonomous_node (RPi)."""
+        msg = Int32MultiArray()
+        msg.data = [row, col]
+        self.pub_nav_goal.publish(msg)
+
     def _on_status(self, msg: String):
         """
         Callback appelé dans le thread ROS2 à chaque message /rover_status.
@@ -441,6 +461,16 @@ class _RosNode(Node):
         Émet status_update → thread GUI → AutonomousPage._on_status()
         """
         self._bridge.status_update.emit(msg.data)
+
+    def _on_grid_pos(self, msg: Int32MultiArray):
+        """Reçoit [col, row] depuis odometry_node — émet grid_pos_update → MapWidget."""
+        if len(msg.data) >= 2:
+            self._bridge.grid_pos_update.emit(int(msg.data[0]), int(msg.data[1]))
+
+    def _on_grid_state(self, msg: Int32MultiArray):
+        """Reçoit 96 valeurs depuis autonomous_node — émet grid_state_update → MapWidget."""
+        if len(msg.data) >= 96:
+            self._bridge.grid_state_update.emit(list(msg.data))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1142,10 +1172,13 @@ class MapWidget(QWidget):
         (4, 'BORDURE'),
     ]
 
-    def __init__(self):
+    def __init__(self, on_start_cb=None):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Callback appelé quand l'utilisateur appuie START : on_start_cb(row, col)
+        self._on_start_cb = on_start_cb
 
         self._fill = {
             self.UNDISCOVERED: QColor('#283C5A'),
@@ -1155,35 +1188,25 @@ class MapWidget(QWidget):
             self.CELL_BORDER:  QColor('#080810'),
         }
 
-        # Positions par défaut (coordonnées paddées, row, col)
+        # Positions par défaut (coordonnées grille, row, col)
         self._target    = (1, 1)
         self._start     = (self.ROWS - 2, self.COLS - 2)
         self._robot_pos = self._start
 
-        self._manual_obstacles = set()
         self._reset_grid()
         self._recalc_priorities()
 
-        # Mode de clic actif : 'target' | 'start' | 'obstacle' | None
+        # Mode de clic actif : 'target' | None
         self._click_mode = None
-        # État de navigation : 'ready' | 'running' | 'done'
+        # État : 'ready' | 'started'
         self._nav_state  = 'ready'
 
         # Rects buttons (mis à jour dans paintEvent, lus dans mousePressEvent)
-        self._btn_cible    = QRectF()
-        self._btn_depart   = QRectF()
-        self._btn_obstacle = QRectF()
-        self._btn_start    = QRectF()
+        self._btn_cible = QRectF()
+        self._btn_start = QRectF()
         self._grid_x0 = 0.0
         self._grid_y0 = 0.0
         self._grid_cs = 1.0
-
-        # Navigation
-        self._path_stack    = []
-        self._transit_path  = []
-        self._ambush_streak = 0
-        self._nav_timer = QTimer(self)
-        self._nav_timer.timeout.connect(self._nav_step)
 
         self.setMinimumSize(200, 380)
         t = QTimer(self)
@@ -1199,8 +1222,6 @@ class MapWidget(QWidget):
              for c in range(self.COLS)]
             for r in range(self.ROWS)
         ]
-        for r, c in getattr(self, '_manual_obstacles', set()):
-            self._cells[r][c] = self.OBSTACLE
 
     def _recalc_priorities(self):
         tr, tc = self._target
@@ -1209,193 +1230,16 @@ class MapWidget(QWidget):
             for r in range(self.ROWS)
         ]
 
-    # ── Navigation simulée ────────────────────────────────────────────
-
-    def _start_navigation(self):
-        """
-        Lance la simulation de navigation : remet la grille à zéro et démarre le timer.
-        Appelée quand l'utilisateur clique le bouton DÉPART dans MapWidget.
-        Le timer _nav_timer appelle _nav_step() toutes les 500ms (un pas de navigation).
-        """
-        self._reset_grid()
-        self._robot_pos  = self._start         # robot part de la position de départ
-        self._path_stack = [self._start]       # pile de backtracking (historique des positions)
-        self._transit_path = []                # chemin de transit via cases FREE (vide au départ)
-        sr, sc = self._start
-        self._cells[sr][sc] = self.FREE        # marque la case de départ comme visitée
-        self._ambush_streak  = 0
-        self._nav_state      = 'running'
-        self._nav_timer.start(500)             # un pas toutes les 500ms
-        self.update()
-
-    def _stop_navigation(self):
-        """Arrête la simulation et remet la grille à l'état initial."""
-        self._nav_timer.stop()
-        self._nav_state    = 'ready'
-        self._transit_path = []
-        self._reset_grid()
-        self._robot_pos    = self._start
-        self.update()
-
-    def _bfs_to_best_undiscovered(self, sr, sc):
-        """
-        BFS (Breadth-First Search) depuis la position (sr, sc).
-
-        OBJECTIF : trouver la case UNDISCOVERED la plus proche de la CIBLE
-                   qui soit atteignable en traversant uniquement des cases FREE.
-
-        POURQUOI BFS et pas A* ou Dijkstra ?
-          BFS garantit le chemin le plus court en nombre de cases (toutes les cases
-          ont le même "coût" de traversée). Ici on ne cherche pas le chemin le plus
-          court vers la cible finale, mais vers la prochaine case à explorer.
-          BFS est plus simple et suffisamment rapide sur une grille 12×8.
-
-        POURQUOI "via FREE" seulement ?
-          On ne peut pas traverser une case UNDISCOVERED pour en atteindre une autre
-          (on ne sait pas si elle est libre). On doit d'abord la visiter.
-          Exception : si une UNDISCOVERED est directement voisine → on peut l'atteindre.
-
-        DIAGONALES :
-          Les 8 directions sont autorisées (y compris diagonales).
-          Condition supplémentaire pour les diagonales : les deux cases adjacentes
-          (dans les directions cardinales) ne doivent pas être bloquées.
-          Exemple : pour aller en (r-1, c-1), les cases (r-1, c) ET (r, c-1)
-          ne doivent pas être OBSTACLE/AMBUSH/BORDER (évite de "passer dans les coins").
-
-        RETOURNE :
-          Liste de cases [(sr,sc), ..., (best_r, best_c)] = chemin complet
-          ou [] si aucune case UNDISCOVERED n'est atteignable (cul-de-sac total).
-
-        PRIORITÉ :
-          Parmi toutes les cases UNDISCOVERED atteignables, on choisit celle avec
-          la priorité (distance Chebyshev vers la cible) la plus faible.
-          → le rover explore toujours en direction de la cible en premier.
-        """
-        from collections import deque
-        _blocked = (self.CELL_BORDER, self.OBSTACLE, self.AMBUSH)
-        # 8 directions : N, S, O, E + 4 diagonales
-        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
-
-        parent   = {(sr, sc): None}  # pour reconstruire le chemin final
-        queue    = deque([(sr, sc)])
-        best_priority = float('inf')  # on cherche la priorité MINIMALE (plus proche cible)
-        best_end = None               # case UNDISCOVERED la plus intéressante trouvée
-
-        while queue:
-            r, c = queue.popleft()
-            for dr, dc in dirs:
-                nr, nc = r + dr, c + dc
-                # Vérification des limites de la grille
-                if not (0 <= nr < self.ROWS and 0 <= nc < self.COLS):
-                    continue
-                cell = self._cells[nr][nc]
-                # Cases bloquées → on ne peut pas passer
-                if cell in _blocked:
-                    continue
-                # Vérification diagonale : pas de passage dans les coins
-                if abs(dr) == 1 and abs(dc) == 1:
-                    if self._cells[r][nc] in _blocked or self._cells[nr][c] in _blocked:
-                        continue
-                # Déjà visité par ce BFS → ignorer
-                if (nr, nc) in parent:
-                    continue
-                parent[(nr, nc)] = (r, c)  # mémorise d'où on vient (pour reconstruire)
-
-                if cell == self.UNDISCOVERED:
-                    # Case candidate ! Vérifier si c'est la meilleure (priorité min)
-                    p = self._priority[nr][nc]
-                    if p < best_priority:
-                        best_priority = p
-                        best_end      = (nr, nc)
-                    # On N'ajoute PAS à la queue : on ne traverse pas les UNDISCOVERED
-                else:
-                    # Case FREE → on peut traverser → continuer le BFS à partir d'ici
-                    queue.append((nr, nc))
-
-        if best_end is None:
-            return []  # cul-de-sac total : aucune case UNDISCOVERED atteignable
-
-        # Reconstruction du chemin en remontant le dict parent
-        path = []
-        cur  = best_end
-        while cur is not None:
-            path.append(cur)
-            cur = parent[cur]
-        path.reverse()  # on avait construit à l'envers (de la fin vers le début)
-        return path      # → [(sr,sc), case1, case2, ..., best_end]
-
-    def _nav_step(self):
-        """
-        Un pas de navigation — appelé toutes les 500ms par le timer.
-        Implémente l'algorithme de navigation BFS avec backtracking.
-
-        TROIS CAS POSSIBLES à chaque tick :
-
-        1. La cible est atteinte → fin de simulation
-        2. Transit en cours (self._transit_path non vide) → avancer d'une case sur le chemin
-           Le transit se produit quand la meilleure UNDISCOVERED n'est pas directement voisine
-           mais accessible via un couloir de cases FREE déjà visitées.
-        3. Pas de transit → lancer un BFS pour trouver le prochain mouvement :
-           a. Aucune case UNDISCOVERED atteignable → cul-de-sac → AMBUSH + backtrack
-           b. Case UNDISCOVERED directement voisine → déplacement classique
-           c. Case UNDISCOVERED accessible via transit → stocker le chemin intermédiaire
-        """
-        cr, cc = self._robot_pos
-
-        # Cas 1 : mission accomplie
-        if (cr, cc) == self._target:
-            self._nav_state = 'done'
-            self._nav_timer.stop()
-            self.update()
-            return
-
-        # Cas 2 : transit en cours → suivre le chemin stocké case par case
-        if self._transit_path:
-            nr, nc = self._transit_path.pop(0)  # prochaine case du chemin
-            if self._cells[nr][nc] == self.UNDISCOVERED:
-                # On vient de "découvrir" cette case en transit → marquer FREE
-                self._cells[nr][nc] = self.FREE
-                self._ambush_streak  = 0
-            self._robot_pos = (nr, nc)
-            self.update()
-            return
-
-        # Cas 3 : calculer le prochain mouvement via BFS
-        path = self._bfs_to_best_undiscovered(cr, cc)
-
-        if not path:
-            # CAS 3a : cul-de-sac — aucune case UNDISCOVERED atteignable depuis ici
-            # → marquer la case courante AMBUSH (à éviter à l'avenir)
-            # → backtrack : revenir à la case précédente dans path_stack
-            self._cells[cr][cc]  = self.AMBUSH
-            self._ambush_streak += 1
-            if self._path_stack:
-                self._robot_pos = self._path_stack.pop()  # recule d'un pas
-
-        elif len(path) == 2:
-            # CAS 3b : la case UNDISCOVERED est directement voisine (chemin = [courant, voisin])
-            nr, nc = path[1]
-            self._cells[nr][nc] = self.FREE          # découverte de la case
-            self._path_stack.append((cr, cc))        # mémorise la position courante pour backtrack
-            self._robot_pos      = (nr, nc)
-            self._ambush_streak  = 0
-
-        else:
-            # CAS 3c : la case UNDISCOVERED est atteinte via un transit de cases FREE
-            # path = [courant, free1, free2, ..., undiscovered]
-            # Stocker le chemin complet et avancer d'un pas
-            self._path_stack.append((cr, cc))
-            self._transit_path = path[1:]            # tout le chemin sauf la case courante
-            nr, nc = self._transit_path.pop(0)       # premier pas du transit
-            self._robot_pos = (nr, nc)
-
-        self.update()
-
     # ── Interface publique ────────────────────────────────────────────
 
-    def update_grid(self, cells: list):
-        self._cells = cells
-        self.update()
+    def update_grid(self, flat: list):
+        """Reçoit 96 valeurs row-major depuis /rover/grid_state et reconstruit la grille 2D."""
+        if len(flat) >= self.ROWS * self.COLS:
+            self._cells = [
+                flat[r * self.COLS:(r + 1) * self.COLS]
+                for r in range(self.ROWS)
+            ]
+            self.update()
 
     def update_position(self, col: int, row: int):
         self._robot_pos = (row, col)
@@ -1408,10 +1252,17 @@ class MapWidget(QWidget):
         py = event.position().y()
 
         if self._btn_start.contains(px, py):
-            if self._nav_state == 'running':
-                self._stop_navigation()
+            if self._nav_state == 'started':
+                # RESET : permet de choisir une nouvelle cible
+                self._nav_state = 'ready'
+                self._reset_grid()
+                self._robot_pos = self._start
             else:
-                self._start_navigation()
+                # START : envoie nav_goal au rover via callback
+                if self._on_start_cb is not None:
+                    self._on_start_cb(self._target[0], self._target[1])
+                self._nav_state = 'started'
+            self.update()
             return
 
         if self._btn_cible.contains(px, py):
@@ -1419,43 +1270,16 @@ class MapWidget(QWidget):
             self.update()
             return
 
-        if self._btn_depart.contains(px, py):
-            self._click_mode = 'start' if self._click_mode != 'start' else None
-            self.update()
-            return
-
-        if self._btn_obstacle.contains(px, py):
-            self._click_mode = 'obstacle' if self._click_mode != 'obstacle' else None
-            self.update()
-            return
-
-        if self._nav_state != 'running' and self._click_mode is not None:
+        if self._click_mode == 'target':
             cs = self._grid_cs
             col = int((px - self._grid_x0) / cs)
             row = int((py - self._grid_y0) / cs)
             if 1 <= row <= self.ROWS - 2 and 1 <= col <= self.COLS - 2:
-                if self._click_mode == 'obstacle':
-                    if (row, col) not in (self._target, self._start):
-                        if (row, col) in self._manual_obstacles:
-                            self._manual_obstacles.discard((row, col))
-                            self._cells[row][col] = self.UNDISCOVERED
-                        else:
-                            self._manual_obstacles.add((row, col))
-                            self._cells[row][col] = self.OBSTACLE
-                    # mode sticky : ne pas réinitialiser _click_mode
-                elif self._click_mode == 'target':
-                    self._target = (row, col)
-                    self._click_mode = None
-                    self._recalc_priorities()
-                    self._reset_grid()
-                    self._nav_state = 'ready'
-                else:
-                    self._start = (row, col)
-                    self._robot_pos = (row, col)
-                    self._click_mode = None
-                    self._recalc_priorities()
-                    self._reset_grid()
-                    self._nav_state = 'ready'
+                self._target = (row, col)
+                self._click_mode = None
+                self._recalc_priorities()
+                self._reset_grid()
+                self._nav_state = 'ready'
                 self.update()
 
     # ── Rendu ─────────────────────────────────────────────────────────
@@ -1491,17 +1315,13 @@ class MapWidget(QWidget):
         p.setFont(f)
         p.drawText(margin, LABEL_H - 4, 'NAVIGATION MAP')
 
-        # Boutons mode (ligne sous le titre)
+        # Bouton CIBLE (sélection de la case cible)
         btn_w = 62
         btn_h = 20
         by    = LABEL_H + 2
-        self._btn_obstacle = QRectF(self.width() - margin - 3 * btn_w - 10, by, btn_w, btn_h)
-        self._btn_cible    = QRectF(self.width() - margin - 2 * btn_w - 5,  by, btn_w, btn_h)
-        self._btn_depart   = QRectF(self.width() - margin - btn_w,           by, btn_w, btn_h)
+        self._btn_cible = QRectF(self.width() - margin - btn_w, by, btn_w, btn_h)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self._draw_mode_btn(p, self._btn_obstacle, 'OBSTACLE', self._click_mode == 'obstacle', QColor('#9B1C1C'))
-        self._draw_mode_btn(p, self._btn_cible,    'CIBLE',    self._click_mode == 'target',   QColor(ACCENT_2))
-        self._draw_mode_btn(p, self._btn_depart,   'DÉPART',   self._click_mode == 'start',    QColor(ACCENT))
+        self._draw_mode_btn(p, self._btn_cible, 'CIBLE', self._click_mode == 'target', QColor(ACCENT_2))
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         # Cellules
@@ -1581,9 +1401,7 @@ class MapWidget(QWidget):
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_start_btn(self, p: QPainter, rect: QRectF):
-        if self._nav_state == 'running':
-            label, color = '■  STOP',  QColor(PRIMARY)
-        elif self._nav_state == 'done':
+        if self._nav_state == 'started':
             label, color = '↺  RESET', QColor(ACCENT)
         else:
             label, color = '▶  START', QColor(ACCENT_2)
@@ -1972,6 +1790,10 @@ class AutonomousPage(QWidget):
         bridge.frame_ready.connect(self._on_frame)
         bridge.aruco_update.connect(self._on_aruco)
         bridge.status_update.connect(self._on_status)
+        bridge.grid_pos_update.connect(
+            lambda col, row: self.map_widget.update_position(col, row)
+        )
+        bridge.grid_state_update.connect(self.map_widget.update_grid)
 
     # ── Construction ──
 
@@ -2013,7 +1835,9 @@ class AutonomousPage(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(0)
 
-        self.map_widget = MapWidget()
+        self.map_widget = MapWidget(
+            on_start_cb=lambda row, col: self.bridge.publish_nav_goal(row, col)
+        )
         self.map_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self.map_widget, 1)
 
