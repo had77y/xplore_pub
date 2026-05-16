@@ -31,7 +31,7 @@ class DiagNode(Node):
         self.create_subscription(Int32MultiArray,   '/rover/motor_cmd',      self._cb_motors, 10)
         self.create_subscription(Int32MultiArray,   '/rover/arm_serial_cmd', self._cb_arm,    10)
 
-        self.create_timer(0.1, self._print)
+        self.create_timer(0.5, self._print)
 
     def _cb_imu(self, msg: Imu):
         with self._lock: self._imu = msg
